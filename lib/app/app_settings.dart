@@ -21,6 +21,8 @@ class AppSettings {
       'disableReceiveShapeAnimation';
   static const String deviceNameKey = 'deviceName';
   static const String deviceIdKey = 'deviceId';
+  static const String languageKey = 'language';
+  static const String defaultLanguageCode = 'system';
   static const int defaultPort = 8050;
   static const String defaultPrimaryColorName = 'green';
 
