@@ -1,0 +1,2 @@
+"NSLocalNetworkUsageDescription" = "Flashbyte uses your local network to discover nearby devices and transfer files directly.";
+"NSLocationWhenInUseUsageDescription" = "Flashbyte may use Wi-Fi network information to detect the current local network for nearby file sharing.";
