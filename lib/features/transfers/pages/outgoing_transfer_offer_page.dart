@@ -660,4 +660,123 @@ class _ApprovalDeviceRow extends StatelessWidget {
     if (value.length <= 12) {
       return value;
     }
-    return '${value.substring(0,
+    return '${value.substring(0, 6)}...${value.substring(value.length - 6)}';
+  }
+}
+
+class _ApprovalFileRow extends StatelessWidget {
+  const _ApprovalFileRow({required this.fileName});
+
+  final String fileName;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final extension = _extensionLabel(fileName);
+
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        spacing: 12,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+              ),
+            ),
+            child: Icon(
+              _fileIcon(extension),
+              size: 20,
+              color: colorScheme.primary,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          _DetailPill(icon: Icons.description_rounded, label: extension),
+        ],
+      ),
+    );
+  }
+
+  static IconData _fileIcon(String extension) {
+    final lower = extension.toLowerCase();
+    if (const {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'}.contains(lower)) {
+      return Icons.image_rounded;
+    }
+    if (const {'mp4', 'mov', 'mkv', 'webm', 'avi'}.contains(lower)) {
+      return Icons.movie_rounded;
+    }
+    if (const {'mp3', 'wav', 'flac', 'm4a', 'aac'}.contains(lower)) {
+      return Icons.music_note_rounded;
+    }
+    if (const {'zip', 'rar', '7z', 'tar', 'gz'}.contains(lower)) {
+      return Icons.archive_rounded;
+    }
+    return Icons.insert_drive_file_rounded;
+  }
+
+  static String _extensionLabel(String fileName) {
+    final extensionIndex = fileName.lastIndexOf('.');
+    if (extensionIndex <= 0 || extensionIndex == fileName.length - 1) {
+      return 'FILE';
+    }
+    final extension = fileName.substring(extensionIndex + 1).toUpperCase();
+    return extension.length > 5 ? extension.substring(0, 5) : extension;
+  }
+}
+
+class _DetailPill extends StatelessWidget {
+  const _DetailPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      constraints: const BoxConstraints(minHeight: 30),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 6,
+        children: [
+          Icon(icon, size: 14, color: colorScheme.onSurfaceVariant),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
