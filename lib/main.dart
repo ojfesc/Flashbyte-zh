@@ -12,7 +12,10 @@ import 'package:flashbyte/services/platform/android_connection_notification_serv
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
 import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/app/controllers/app_appearance_controller.dart';
+import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/features/settings/settings_page.dart';
@@ -91,7 +94,6 @@ Future<void> main() async {
   }
   await AppAppearanceController.instance.load();
   await AppMotionController.instance.load();
-  await AppLocaleController.instance.load();
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
@@ -125,7 +127,11 @@ class _MainAppState extends State<MainApp> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([appearanceController, motionController]),
+      animation: Listenable.merge([
+        appearanceController,
+        motionController,
+        AppLocaleController.instance,
+      ]),
       builder: (context, child) {
         return DynamicColorBuilder(
           builder: (lightDynamic, darkDynamic) {
@@ -139,6 +145,14 @@ class _MainAppState extends State<MainApp> {
                   child: child ?? const SizedBox.shrink(),
                 );
               },
+              locale: AppLocaleController.instance.locale,
+              supportedLocales: AppLocalizations.supportedLocales,
+              localizationsDelegates: const [
+                AppLocalizations.delegate,
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
               theme: appearanceController.buildTheme(
                 brightness: Brightness.light,
                 dynamicScheme: lightDynamic,
@@ -383,7 +397,7 @@ class _StartPageState extends State<StartPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Flashbyte',
+                      AppLocalizations.of(context).appTitle,
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.5,
@@ -391,7 +405,7 @@ class _StartPageState extends State<StartPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Local file sharing',
+                      AppLocalizations.of(context).localFileSharing,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -422,16 +436,16 @@ class _StartPageState extends State<StartPage> {
                   children: [
                     _HomeActionCard(
                       icon: Icons.north_east_rounded,
-                      title: 'Send files',
-                      subtitle: 'Choose files to share',
+                      title: AppLocalizations.of(context).sendFiles,
+                      subtitle: AppLocalizations.of(context).chooseFilesToShare,
                       backgroundColor: colorScheme.surfaceContainerHighest,
                       foregroundColor: colorScheme.onSurface,
                       onTap: () => _openSharing(0),
                     ),
                     _HomeActionCard(
                       icon: Icons.south_west_rounded,
-                      title: 'Receive files',
-                      subtitle: 'Wait for a sender',
+                      title: AppLocalizations.of(context).receiveFiles,
+                      subtitle: AppLocalizations.of(context).waitForSender,
                       backgroundColor: colorScheme.primary,
                       foregroundColor: colorScheme.onPrimary,
                       onTap: () => _openSharing(1),
@@ -460,7 +474,7 @@ class _StartPageState extends State<StartPage> {
                   child: TextButton.icon(
                     onPressed: _openSettings,
                     icon: const Icon(Icons.settings_rounded, size: 20),
-                    label: const Text('Settings'),
+                    label: Text(AppLocalizations.of(context).settings),
                     style: TextButton.styleFrom(
                       foregroundColor: colorScheme.onSurfaceVariant,
                       padding: const EdgeInsets.symmetric(
@@ -515,7 +529,7 @@ class _StartPageState extends State<StartPage> {
                         _maybeAnimate(
                           context,
                           Text(
-                            "Flashbyte",
+                            AppLocalizations.of(context).appTitle,
                             style: Theme.of(context).textTheme.displayMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
@@ -533,7 +547,7 @@ class _StartPageState extends State<StartPage> {
                         _maybeAnimate(
                           context,
                           Text(
-                            "Share files with devices on your local network.",
+                            AppLocalizations.of(context).shareFilesDescription,
                             style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(
                                   color: colorScheme.onSurfaceVariant,
