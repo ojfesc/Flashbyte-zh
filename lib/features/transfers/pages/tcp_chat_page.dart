@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
@@ -63,17 +64,19 @@ class _TcpChatPageState extends State<TcpChatPage> {
           }
           if (isDisconnected.value) {
             showScaffoldSnackbar(
-              "Connection lost — couldn't send shared files",
+              AppLocalizations.of(context).couldNotSendSharedFiles,
             );
             return;
           }
           for (final file in batch) {
             _sendPickedFile(file);
           }
+          final l10n = AppLocalizations.of(context);
+          final peerName = _peerName(context);
           showScaffoldSnackbar(
             batch.length == 1
-                ? "Sending shared file to ${_peerName()}"
-                : "Sending ${batch.length} shared files to ${_peerName()}",
+                ? l10n.sendingSharedFileTo(peerName)
+                : l10n.sendingNSharedFilesTo(batch.length, peerName),
           );
         });
 
@@ -110,9 +113,6 @@ class _TcpChatPageState extends State<TcpChatPage> {
                   SocketService.instance.connectedPeerInfo?['certFingerprint']
                       as String?;
               if (TrustedDevicesService.instance.isTrusted(senderFingerprint)) {
-                // Trusted sender — accept automatically; the transfer card
-                // appears when the file data starts arriving, exactly as if
-                // the user had tapped Accept.
                 SocketService.instance.acceptTransfer(fileId);
                 break;
               }
@@ -246,13 +246,19 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
           case 'error':
             final isFatal = message['fatal'] == 'true';
-            final errorText = message['message'] as String? ?? 'Unknown error';
+            final errorText =
+                message['message'] as String? ??
+                AppLocalizations.of(context).unknownError;
             if (isFatal) {
               _showErrorAfterCancellationWindow(errorText);
             } else {
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(errorText)),
+                SnackBar(
+                  content: Text(
+                    AppLocalizations.of(context).localizeError(errorText),
+                  ),
+                ),
               );
             }
             break;
@@ -283,6 +289,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return PopScope(
       canPop: true,
       onPopInvokedWithResult: (didPop, result) {
@@ -297,7 +304,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           FocusManager.instance.primaryFocus!.unfocus();
         },
         child: Scaffold(
-          appBar: AppBar(title: const Text("Share")),
+          appBar: AppBar(title: Text(l10n.share)),
           body: SafeArea(
             child: Row(
               children: [
@@ -356,7 +363,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                                         .colorScheme
                                                         .inverseSurface,
                                                   ),
-                                                  Text("No files sent yet."),
+                                                  Text(l10n.noFilesSentYet),
                                                 ],
                                               ),
                                             ),
@@ -424,6 +431,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
   }
 
   Widget _buildPeerDetailsPanel() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final peer = _peerInfo;
     final disconnected = isDisconnected.value;
@@ -446,7 +454,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                   children: [
                     const CircularProgressIndicator(),
                     Text(
-                      "Identifying connected device...",
+                      l10n.identifyingConnectedDevice,
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: colorScheme.onSurfaceVariant,
@@ -471,7 +479,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      peer['name'] as String? ?? "Connected device",
+                      peer['name'] as String? ?? l10n.connectedDevice,
                       textAlign: TextAlign.center,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -490,7 +498,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
                               : colorScheme.primary,
                         ),
                         Text(
-                          disconnected ? "Disconnected" : "Connected",
+                          disconnected
+                              ? l10n.disconnected
+                              : l10n.connected,
                           style: Theme.of(context).textTheme.labelLarge
                               ?.copyWith(
                                 color: disconnected
@@ -521,7 +531,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                               ),
                               Expanded(
                                 child: Text(
-                                  "This session ended. Go back to reconnect before sending more files.",
+                                  l10n.sessionEndedMessage,
                                   style: Theme.of(context).textTheme.bodyMedium
                                       ?.copyWith(
                                         color: disconnectedColor,
@@ -536,32 +546,34 @@ class _TcpChatPageState extends State<TcpChatPage> {
                     const SizedBox(height: 28),
                     _buildPeerDetailRow(
                       icon: Icons.lan_rounded,
-                      label: "IP address",
-                      value: peer['address'] as String? ?? "Unknown",
+                      label: l10n.ipAddress,
+                      value: peer['address'] as String? ?? l10n.unknownValue,
                     ),
                     const Divider(height: 28),
                     _buildPeerDetailRow(
                       icon: Icons.numbers_rounded,
-                      label: "Port",
-                      value: (peer['port'] as int?)?.toString() ?? "Unknown",
+                      label: l10n.port,
+                      value:
+                          (peer['port'] as int?)?.toString() ??
+                          l10n.unknownValue,
                     ),
                     const Divider(height: 28),
                     _buildPeerDetailRow(
                       icon: Icons.devices_rounded,
-                      label: "Device",
+                      label: l10n.device,
                       value: peer['deviceType'] == 'laptop'
-                          ? "Desktop or laptop"
-                          : "Phone or tablet",
+                          ? l10n.desktopOrLaptop
+                          : l10n.phoneOrTablet,
                     ),
                     const Divider(height: 28),
                     _buildPeerDetailRow(
                       icon: peer['tls'] == true
                           ? Icons.lock_rounded
                           : Icons.lock_open_rounded,
-                      label: "Security",
+                      label: l10n.security,
                       value: peer['tls'] == true
-                          ? "TLS enabled"
-                          : "Unencrypted",
+                          ? l10n.tlsEnabled
+                          : l10n.unencrypted,
                     ),
                   ],
                 ),
@@ -608,19 +620,20 @@ class _TcpChatPageState extends State<TcpChatPage> {
   }
 
   Widget _buildPickFileButton({required bool isConnectionLost}) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final disabledColor = colorScheme.onSurfaceVariant;
     final disabled = isConnectionLost || isSharingInProgress;
     final title = isConnectionLost
-        ? "Connection lost"
+        ? l10n.connectionLost
         : isSharingInProgress
-        ? "Transfer in progress"
-        : "Pick File";
+        ? l10n.transferInProgress
+        : l10n.pickFile;
     final subtitle = isConnectionLost
-        ? "Reconnect to send more files"
+        ? l10n.reconnectToSendMore
         : isSharingInProgress
-        ? "Wait for this transfer to finish"
-        : "Choose another file to send";
+        ? l10n.waitForTransferToFinish
+        : l10n.chooseAnotherFile;
     final icon = isConnectionLost
         ? Icons.link_off_rounded
         : isSharingInProgress
@@ -721,9 +734,11 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
-  String _peerName() {
+  String _peerName(BuildContext context) {
     final name = _peerInfo?['name'] as String?;
-    return (name == null || name.isEmpty) ? 'peer' : name;
+    return (name == null || name.isEmpty)
+        ? AppLocalizations.of(context).peer
+        : name;
   }
 
   void _sendPickedFile(FastFilePickerPath pickedFile) {
@@ -732,7 +747,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
         : pickedFile.path;
 
     if (fileLocation == null) {
-      showScaffoldSnackbar("Could not read selected file");
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).couldNotReadSelectedFile,
+      );
       return;
     }
 
@@ -743,7 +760,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
     if (_errorDialogVisible || !mounted) {
       return;
     }
+    final l10n = AppLocalizations.of(context);
     final error = UserFacingError.from(message);
+    final displayMessage = l10n.localizeError(error.message);
     final colorScheme = Theme.of(context).colorScheme;
 
     setState(() {
@@ -764,7 +783,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
               Icons.error_rounded,
               color: colorScheme.onErrorContainer,
             ),
-            const Text('Connection Lost'),
+            Text(l10n.connectionLostDialog),
           ],
         ),
         content: Column(
@@ -772,7 +791,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           mainAxisSize: MainAxisSize.min,
           spacing: 10,
           children: [
-            Text(error.message),
+            Text(displayMessage),
             if (error.hasDetails)
               Card(
                 margin: EdgeInsets.zero,
@@ -1059,12 +1078,13 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
     if (!_leavingPage && isSharingInProgress) {
       _showConnectionIssueDialog(
-        message:
-            'Connection lost. The other device disconnected during the transfer.',
+        message: AppLocalizations.of(context).connectionLostDuringTransfer,
       );
     } else if (!_leavingPage) {
       Navigator.pop(context);
-      showScaffoldSnackbar("Disconnected");
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).disconnectedSnackbar,
+      );
     }
   }
 
