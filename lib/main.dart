@@ -91,6 +91,7 @@ Future<void> main() async {
   }
   await AppAppearanceController.instance.load();
   await AppMotionController.instance.load();
+  await AppLocaleController.instance.load();
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
