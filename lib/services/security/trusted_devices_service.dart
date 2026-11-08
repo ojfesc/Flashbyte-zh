@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,7 +29,10 @@ class TrustedDevice {
 
   factory TrustedDevice.fromJson(Map<String, dynamic> json) => TrustedDevice(
     fingerprint: json['fingerprint'] as String,
-    name: json['name'] as String? ?? 'Unknown device',
+    name: json['name'] as String? ??
+        (Platform.localeName.toLowerCase().startsWith('zh')
+            ? '未知设备'
+            : 'Unknown device'),
     addedAt:
         DateTime.tryParse(json['addedAt'] as String? ?? '') ?? DateTime.now(),
   );
