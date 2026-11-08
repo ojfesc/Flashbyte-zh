@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flutter/material.dart';
@@ -98,11 +99,12 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final receiverName =
         _receiver?['name'] as String? ??
         widget.receiverPreview?.name ??
-        'Receiver';
+        l10n.receiver;
     final receiverAddress =
         _receiver?['address'] as String? ?? widget.receiverPreview?.address;
     final receiverType = _receiver?['deviceType'] == 'laptop'
@@ -129,11 +131,11 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
           backgroundColor: colorScheme.surfaceContainerLowest,
           centerTitle: true,
           leading: IconButton(
-            tooltip: 'Cancel transfer',
+            tooltip: l10n.cancelTransferTooltip,
             onPressed: _cancel,
             icon: const Icon(Icons.arrow_back_rounded),
           ),
-          title: const Text('Sending files'),
+          title: Text(l10n.sendingFiles),
         ),
         body: SafeArea(
           child: Center(
@@ -169,6 +171,7 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
     bool receiverUsesTls,
     String? receiverFingerprint,
   ) {
+    final l10n = AppLocalizations.of(context);
     final receiverPort =
         (_receiver?['port'] as int?) ?? widget.receiverPreview?.port;
     final totalFiles = widget.files.length;
@@ -180,9 +183,8 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
           context,
           _ApprovalHeader(
             icon: Icons.schedule_send_rounded,
-            title: 'Waiting for approval',
-            message:
-                'The receiver needs to accept this request before sending begins.',
+            title: l10n.waitingForApproval,
+            message: l10n.receiverNeedsToAccept,
           ),
           (child) => child
               .animate()
@@ -195,7 +197,7 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
             builder: (context, constraints) {
               final isWide = constraints.maxWidth >= 720;
               final deviceCard = _OfferSurface(
-                title: 'Devices',
+                title: l10n.devices,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                   child: Column(
@@ -205,11 +207,11 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
                       _maybeAnimate(
                         context,
                         _ApprovalDeviceRow(
-                          label: 'This device',
+                          label: l10n.thisDevice,
                           name: widget.senderName,
-                          detail: _deviceTypeLabel(widget.senderType),
+                          detail: _deviceTypeLabel(l10n, widget.senderType),
                           type: widget.senderType,
-                          address: 'Local sender',
+                          address: l10n.localSenderLabel,
                           port: null,
                           usesTls: widget.senderUsesTls,
                           color: colorScheme.secondaryContainer,
@@ -230,11 +232,11 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
                       _maybeAnimate(
                         context,
                         _ApprovalDeviceRow(
-                          label: 'Receiver',
+                          label: l10n.receiver,
                           name: receiverName,
-                          detail: _deviceTypeLabel(receiverType),
+                          detail: _deviceTypeLabel(l10n, receiverType),
                           type: receiverType,
-                          address: receiverAddress ?? 'Address pending',
+                          address: receiverAddress ?? l10n.addressPending,
                           port: receiverPort,
                           usesTls: receiverUsesTls,
                           fingerprint: receiverFingerprint,
@@ -255,8 +257,7 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
                 ),
               );
               final filesCard = _OfferSurface(
-                title:
-                    '$totalFiles ${totalFiles == 1 ? 'file' : 'files'} selected',
+                title: l10n.nFilesSelectedCount(totalFiles),
                 fillChild: true,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -314,7 +315,7 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
         OutlinedButton.icon(
           onPressed: _cancel,
           icon: const Icon(Icons.close_rounded),
-          label: const Text('Cancel transfer'),
+          label: Text(l10n.cancelTransfer),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(52),
           ),
@@ -324,14 +325,17 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
   }
 
   Widget _buildOutcomeContent(BuildContext context, ColorScheme colorScheme) {
+    final l10n = AppLocalizations.of(context);
     final declined = _outcome == _OutgoingOfferOutcome.declined;
     final icon = declined
         ? Icons.block_rounded
         : Icons.portable_wifi_off_rounded;
-    final title = declined ? 'Receiver declined the files' : 'Connection ended';
+    final title = declined
+        ? l10n.receiverDeclinedFiles
+        : l10n.connectionEnded;
     final message = declined
-        ? 'The receiver chose not to accept these files. Nothing was sent.'
-        : 'The connection ended before the receiver responded. No files were sent.';
+        ? l10n.receiverDeclinedMessage
+        : l10n.connectionEndedBeforeResponse;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -365,14 +369,16 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
         const SizedBox(height: 28),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Back to file selection'),
+          child: Text(l10n.backToFileSelection),
         ),
       ],
     );
   }
 
-  String _deviceTypeLabel(DiscoveredDeviceType type) {
-    return type == DiscoveredDeviceType.laptop ? 'Desktop or laptop' : 'Phone';
+  String _deviceTypeLabel(AppLocalizations l10n, DiscoveredDeviceType type) {
+    return type == DiscoveredDeviceType.laptop
+        ? l10n.desktopOrLaptop
+        : l10n.phone;
   }
 }
 
@@ -478,6 +484,7 @@ class _TransferDirectionDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Row(
@@ -508,7 +515,7 @@ class _TransferDirectionDivider extends StatelessWidget {
                     : colorScheme.onSurfaceVariant,
               ),
               Text(
-                secure ? 'Secure request' : 'Unencrypted request',
+                secure ? l10n.secureRequest : l10n.unencryptedRequest,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: secure
                       ? colorScheme.onPrimaryContainer
@@ -556,6 +563,7 @@ class _ApprovalDeviceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Material(
@@ -626,13 +634,13 @@ class _ApprovalDeviceRow extends StatelessWidget {
                   if (port != null)
                     _DetailPill(
                       icon: Icons.numbers_rounded,
-                      label: 'Port $port',
+                      label: l10n.portLabel(port!),
                     ),
                   _DetailPill(
                     icon: usesTls
                         ? Icons.lock_rounded
                         : Icons.lock_open_rounded,
-                    label: usesTls ? 'TLS enabled' : 'Unencrypted',
+                    label: usesTls ? l10n.tlsEnabled : l10n.unencrypted,
                   ),
                   if (usesTls && fingerprint != null)
                     _DetailPill(
@@ -652,123 +660,4 @@ class _ApprovalDeviceRow extends StatelessWidget {
     if (value.length <= 12) {
       return value;
     }
-    return '${value.substring(0, 6)}...${value.substring(value.length - 6)}';
-  }
-}
-
-class _ApprovalFileRow extends StatelessWidget {
-  const _ApprovalFileRow({required this.fileName});
-
-  final String fileName;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final extension = _extensionLabel(fileName);
-
-    return Container(
-      constraints: const BoxConstraints(minHeight: 58),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        spacing: 12,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: colorScheme.outlineVariant.withValues(alpha: 0.4),
-              ),
-            ),
-            child: Icon(
-              _fileIcon(extension),
-              size: 20,
-              color: colorScheme.primary,
-            ),
-          ),
-          Expanded(
-            child: Text(
-              fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          _DetailPill(icon: Icons.description_rounded, label: extension),
-        ],
-      ),
-    );
-  }
-
-  static IconData _fileIcon(String extension) {
-    final lower = extension.toLowerCase();
-    if (const {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'}.contains(lower)) {
-      return Icons.image_rounded;
-    }
-    if (const {'mp4', 'mov', 'mkv', 'webm', 'avi'}.contains(lower)) {
-      return Icons.movie_rounded;
-    }
-    if (const {'mp3', 'wav', 'flac', 'm4a', 'aac'}.contains(lower)) {
-      return Icons.music_note_rounded;
-    }
-    if (const {'zip', 'rar', '7z', 'tar', 'gz'}.contains(lower)) {
-      return Icons.archive_rounded;
-    }
-    return Icons.insert_drive_file_rounded;
-  }
-
-  static String _extensionLabel(String fileName) {
-    final extensionIndex = fileName.lastIndexOf('.');
-    if (extensionIndex <= 0 || extensionIndex == fileName.length - 1) {
-      return 'FILE';
-    }
-    final extension = fileName.substring(extensionIndex + 1).toUpperCase();
-    return extension.length > 5 ? extension.substring(0, 5) : extension;
-  }
-}
-
-class _DetailPill extends StatelessWidget {
-  const _DetailPill({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Container(
-      constraints: const BoxConstraints(minHeight: 30),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        spacing: 6,
-        children: [
-          Icon(icon, size: 14, color: colorScheme.onSurfaceVariant),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+    return '${value.substring(0,
