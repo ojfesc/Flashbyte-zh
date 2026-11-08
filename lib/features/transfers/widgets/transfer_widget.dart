@@ -1,3 +1,4 @@
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/navigation/hero_dialog_route.dart';
 import 'package:flashbyte/features/transfers/widgets/file_preview_widget.dart';
 import 'package:flutter/foundation.dart';
@@ -51,6 +52,7 @@ class TransferWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
     final isFinished = status == TransferStatus.completed;
@@ -61,12 +63,14 @@ class TransferWidget extends StatelessWidget {
     final isActive =
         status == TransferStatus.inProgress || status == TransferStatus.paused;
     final transferStateText = switch (status) {
-      TransferStatus.pending => isReceived ? "request" : "waiting",
-      TransferStatus.queued => "",
-      TransferStatus.cancelled => "cancelled",
-      TransferStatus.paused => "paused",
-      TransferStatus.completed => isReceived ? "received" : "sent",
-      TransferStatus.inProgress => isReceived ? "receiving" : "sending",
+      TransferStatus.pending => isReceived ? l10n.statusRequest : l10n.statusWaiting,
+      TransferStatus.queued => '',
+      TransferStatus.cancelled => l10n.statusCancelled,
+      TransferStatus.paused => l10n.statusPaused,
+      TransferStatus.completed =>
+        isReceived ? l10n.statusReceived : l10n.statusSent,
+      TransferStatus.inProgress =>
+        isReceived ? l10n.statusReceiving : l10n.statusSending,
     };
     final primaryTextStyle =
         Theme.of(
@@ -153,16 +157,29 @@ class TransferWidget extends StatelessWidget {
                       : (value ?? ValueNotifier<double>(0)),
                   builder: (context, pvalue, child) {
                     Widget buildProgress(double value) {
+                      final ext = fileName.split(".").last.toUpperCase();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         spacing: 10,
                         children: [
                           Text(
                             isCancelled
-                                ? "$fileSize • ${fileName.split(".").last.toUpperCase()} • Cancelled"
+                                ? l10n.fileStatusLine(
+                                    size: fileSize,
+                                    ext: ext,
+                                    status: l10n.statusCancelled,
+                                  )
                                 : isPending || isQueued
-                                ? "$fileSize • ${fileName.split(".").last.toUpperCase()} • 0%"
-                                : "$fileSize • ${fileName.split(".").last.toUpperCase()} • ${(value * 100).round()}%",
+                                ? l10n.fileProgressLine(
+                                    size: fileSize,
+                                    ext: ext,
+                                    percent: 0,
+                                  )
+                                : l10n.fileProgressLine(
+                                    size: fileSize,
+                                    ext: ext,
+                                    percent: (value * 100).round(),
+                                  ),
                           ),
                           LinearProgressIndicator(
                             value: value,
@@ -264,6 +281,7 @@ class _TransferControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Row(
@@ -280,10 +298,10 @@ class _TransferControls extends StatelessWidget {
           ),
           label: Text(
             isPaused && !canResume
-                ? "Pause"
+                ? l10n.pause
                 : isPaused
-                ? "Continue"
-                : "Pause",
+                ? l10n.continueAction
+                : l10n.pause,
           ),
         ),
         FilledButton(
@@ -305,15 +323,15 @@ class _TransferControls extends StatelessWidget {
                     child: child,
                   ),
                   child: isPaused
-                      ? const Padding(
-                          key: ValueKey('cancel-visible'),
-                          padding: EdgeInsets.symmetric(horizontal: 16),
+                      ? Padding(
+                          key: const ValueKey('cancel-visible'),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             spacing: 8,
                             children: [
-                              Icon(Icons.close_rounded),
-                              Text("Cancel"),
+                              const Icon(Icons.close_rounded),
+                              Text(l10n.cancel),
                             ],
                           ),
                         )
@@ -328,14 +346,14 @@ class _TransferControls extends StatelessWidget {
                   curve: Curves.easeOutCubic,
                   alignment: Alignment.centerLeft,
                   child: isPaused
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             spacing: 8,
                             children: [
-                              Icon(Icons.close_rounded),
-                              Text("Cancel"),
+                              const Icon(Icons.close_rounded),
+                              Text(l10n.cancel),
                             ],
                           ),
                         )
@@ -360,6 +378,7 @@ class _TransferAcceptanceControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     if (!isReceived) {
@@ -379,7 +398,7 @@ class _TransferAcceptanceControls extends StatelessWidget {
             ),
             Expanded(
               child: Text(
-                "Waiting for receiver to accept",
+                l10n.waitingForReceiverToAccept,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
@@ -394,7 +413,7 @@ class _TransferAcceptanceControls extends StatelessWidget {
         FilledButton.icon(
           onPressed: onAccept,
           icon: const Icon(Icons.check_rounded),
-          label: const Text("Accept"),
+          label: Text(l10n.accept),
         ),
         FilledButton.tonalIcon(
           style: FilledButton.styleFrom(
@@ -403,7 +422,7 @@ class _TransferAcceptanceControls extends StatelessWidget {
           ),
           onPressed: onDecline,
           icon: const Icon(Icons.close_rounded),
-          label: const Text("Decline"),
+          label: Text(l10n.decline),
         ),
       ],
     );
