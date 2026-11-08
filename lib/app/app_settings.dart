@@ -23,6 +23,8 @@ class AppSettings {
   static const String deviceIdKey = 'deviceId';
   static const int defaultPort = 8050;
   static const String defaultPrimaryColorName = 'green';
+  static const String languageKey = 'language';
+  static const String defaultLanguageCode = 'system';
 
   static const Map<String, MaterialColor> primaryColorOptions = {
     'red': Colors.red,
