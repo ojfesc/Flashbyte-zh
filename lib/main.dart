@@ -49,14 +49,22 @@ Future<void> onNotificationDismissed(ReceivedAction receivedAction) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 读取语言设置，使通知渠道名称与描述匹配应用语言。
+  // AppLocaleController 此时尚未加载，因此直接读取持久化设置。
+  final languageCode = await AppSettings.getLanguage();
+  final isZh = languageCode == 'zh' ||
+      (languageCode == 'system' &&
+          Platform.localeName.toLowerCase().startsWith('zh'));
+
   await AwesomeNotifications().initialize(
     'resource://drawable/ic_notification',
     [
       NotificationChannel(
         channelKey: 'tcp_connection_service',
-        channelName: 'TCP connection service',
-        channelDescription:
-            'Shows when Flashbyte has an active TCP connection.',
+        channelName: isZh ? 'TCP 连接服务' : 'TCP connection service',
+        channelDescription: isZh
+            ? '当 Flashbyte 有活动 TCP 连接时显示。'
+            : 'Shows when Flashbyte has an active TCP connection.',
         channelShowBadge: false,
         importance: NotificationImportance.Min,
         playSound: false,
@@ -65,8 +73,10 @@ Future<void> main() async {
       ),
       NotificationChannel(
         channelKey: 'file_transfer_progress',
-        channelName: 'File transfer progress',
-        channelDescription: 'Shows active Flashbyte file transfer progress.',
+        channelName: isZh ? '文件传输进度' : 'File transfer progress',
+        channelDescription: isZh
+            ? '显示活动的 Flashbyte 文件传输进度。'
+            : 'Shows active Flashbyte file transfer progress.',
         channelShowBadge: false,
         importance: NotificationImportance.High,
         playSound: false,
@@ -75,8 +85,10 @@ Future<void> main() async {
       ),
       NotificationChannel(
         channelKey: 'file_offers',
-        channelName: 'File offers',
-        channelDescription: 'Shows incoming file offers and pending sends.',
+        channelName: isZh ? '文件请求' : 'File offers',
+        channelDescription: isZh
+            ? '显示传入的文件请求和待发送项。'
+            : 'Shows incoming file offers and pending sends.',
         channelShowBadge: false,
         importance: NotificationImportance.High,
         playSound: false,
