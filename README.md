@@ -1,441 +1,387 @@
-<div align="center">
-    <img src="./media/app_icon.png" alt="Flashbyte Logo" width="200" height="200"/>
-    <h1>Flashbyte</h1>
-    <h3>A Simple and fast local file sharing app.</h3>
-</div>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/version-2.1.0-blue?style=for-the-badge" alt="Version"/>
-  <img src="https://img.shields.io/github/actions/workflow/status/iamsami101/Flashbyte/ci.yml?label=CI&style=for-the-badge" alt="CI Status"/>
-  <img src="https://img.shields.io/badge/flutter-3.29-blue?logo=flutter&style=for-the-badge" alt="Flutter"/>
-  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="Flutter"/>
-</p>
-
-### Features
-- **TLS Encryption**: You can send files over an encrypted connection.
-- **Cross-platform support:** Flashbyte is supported on all the major platforms!.
-- **File sharing over local network:** You can send files over local network, without wifi access.
-- **Lossless file sharing:** Send files in their original quality.
-- **All file types supported:** Send file of any type.
-- **No file size limit:** Send files no matter their size.
-- **Doesn't use an external server:** Flashbytes sends to devices using your local network.
-- **Cross-platform:** Transfer files to any device on your local network that has Flashbyte installed.
-- **Open source & no data is collected:** All of the code is readily available on github.
-
-### How does this work?
-Flashbyte uses pure TCP sockets to establish a connection between two devices on a local network inside an isolate (isolated memory channel) which is then utilized to read and send over the file bytes whilst keeping the frontend (main UI isolate) smooth.
-
-You can try out Flashbyte on the following platforms:
-
-<!-- BEGIN AUTO RELEASE DOWNLOADS -->
-| Platform | Download |
-|----------|----------|
-| Android | [APK](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-android.apk) \| [AAB](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-android.aab) |
-| Linux | [TAR](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-linux-x64.tar.gz) |
-| macOS | [DMG](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-macos.dmg) |
-| iOS | [APP](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-ios-unsigned-runner-app.zip) |
-| Windows | [EXE](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-windows-setup-x64.exe) \| [ZIP](https://github.com/ojfesc/Flashbyte-zh/releases/download/v2.1.3/flashbyte-windows-x64.zip) |
-<!-- END AUTO RELEASE DOWNLOADS -->
-
-### Contents
-- [Screenshots](#screenshots)
-- [Installation instructions](#installation-instructions)
-  - [Android](#android)
-  - [Linux](#linux)
-  - [Windows](#windows)
-  - [macOS](#macos)
-  - [iOS](#ios)
-- [Signing release builds](#signing-release-builds)
-- [Building from Source](#building-from-source)
-  - [Prerequisites](#prerequisites)
-  - [Clone the repository](#clone-the-repository)
-  - [Building for Linux](#building-for-linux)
-  - [Building for Android](#building-for-android)
-  - [Building for iOS](#building-for-ios)
-  - [Building for macOS](#building-for-macos)
-  - [Building for Windows](#building-for-windows)
-  - [Debug builds](#debug-builds) 
-
----
-
-## Screenshots:
-<img src="media/previews/mobile-android.png" alt="Flashbyte Android preview" height="300"/> <img src="media/previews/desktop-linux.png" alt="Flashbyte Linux preview" height="300"/>
-
-## Installation instructions:
-- ### Android:
-Install the Flashbyte `.apk` file from the [releases](https://github.com/iamsami101/Flashbyte/releases) page. Now, run the `.apk` file wether it is through a file explorer or via your browser's download page.
-
-- ### Linux: 
-#### Installation script (recommended): [](#tag)
-You can install Flashbyte by running this in your linux terminal:
-```bash
-curl -fsSl "https://raw.githubusercontent.com/iamsami101/Flashbyte/refs/heads/main/install.sh" | bash
-```
-and if you want to uninstall it, you can run:
-```bash
-curl -fsSl "https://raw.githubusercontent.com/iamsami101/Flashbyte/refs/heads/main/uninstall.sh" | bash
-```
----
-#### Manual Installation
-
-If you'd rather not run the install script, you can set up Flashbyte manually:
-
-**1. Download the release**
-
-Grab the latest `flashbyte-linux-x86_64.tar.gz` from the [Releases page](https://github.com/iamsami101/flashbyte/releases).
-
-**2. Extract it**
-
-```bash
-mkdir -p ~/.local/share/flashbyte
-tar xzf flashbyte-linux-x86_64.tar.gz -C ~/.local/share/flashbyte
-chmod +x ~/.local/share/flashbyte/flashbyte
-```
-
-**3. Create a launcher script**
-
-This makes sure the app can find its bundled libraries at runtime:
-
-```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/flashbyte << 'EOF'
-#!/bin/bash
-HERE="$HOME/.local/share/flashbyte"
-export LD_LIBRARY_PATH="$HERE/lib:$LD_LIBRARY_PATH"
-exec "$HERE/flashbyte" "$@"
-EOF
-chmod +x ~/.local/bin/flashbyte
-```
-
-Make sure `~/.local/bin` is on your `PATH`. Check with:
-
-```bash
-echo $PATH | grep -q "$HOME/.local/bin" && echo "OK" || echo "not on PATH"
-```
-
-If it's not, add this to your `~/.bashrc` or `~/.zshrc`, then restart your terminal:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-**4. Install the icons**
-
-```bash
-for size_dir in ~/.local/share/flashbyte/share/icons/hicolor/*/apps; do
-    size_name=$(basename "$(dirname "$size_dir")")
-    mkdir -p ~/.local/share/icons/hicolor/"$size_name"/apps
-    cp "$size_dir/flashbyte.png" ~/.local/share/icons/hicolor/"$size_name"/apps/flashbyte.png
-done
-```
-
-**5. Install the desktop entry**
-
-> The desktop entry filename and `StartupWMClass` must match the app's
-> GApplication ID (`com.iamsami.flashbyte`) so GNOME shows the icon and app
-> name correctly in the dock.
-
-```bash
-mkdir -p ~/.local/share/applications
-cat > ~/.local/share/applications/com.iamsami.flashbyte.desktop << EOF
-[Desktop Entry]
-Type=Application
-Name=Flashbyte
-Comment=LAN file sharing app
-Exec=$HOME/.local/bin/flashbyte
-Icon=flashbyte
-Categories=Network;
-Terminal=false
-StartupWMClass=com.iamsami.flashbyte
-EOF
-chmod +x ~/.local/share/applications/com.iamsami.flashbyte.desktop
-rm -f ~/.local/share/applications/flashbyte.desktop
-```
-
-**6. Refresh your desktop caches**
-
-```bash
-update-desktop-database ~/.local/share/applications
-gtk-update-icon-cache ~/.local/share/icons/hicolor
-```
-
-**7. Run it**
-
-Either launch **Flashbyte** from your application menu, or run it directly:
-
-```bash
-flashbyte
-```
-
-#### Uninstalling manually
-
-```bash
-rm -rf ~/.local/share/flashbyte
-rm -f ~/.local/bin/flashbyte
-rm -f ~/.local/share/applications/com.iamsami.flashbyte.desktop
-rm -f ~/.local/share/applications/flashbyte.desktop
-rm -f ~/.local/share/icons/hicolor/*/apps/flashbyte.png
-update-desktop-database ~/.local/share/applications
-gtk-update-icon-cache ~/.local/share/icons/hicolor
-```
-
-- ### Windows:
-
-Download the **Flashbyte Setup Wizard** (`flashbyte-windows-setup-x64.exe`) or the portable `flashbyte-windows-x64.zip` from the [releases](https://github.com/iamsami101/Flashbyte/releases) page.
-
-**Installer (recommended):** Run the installer and follow the wizard, then launch **Flashbyte** from the Start menu or desktop shortcut. To remove Flashbyte, use **Settings > Apps**.
-
-**Portable:** Extract the zip file, then run:
-
-```powershell
-flashbyte.exe
-```
-
-If Windows SmartScreen warns you that the app is from an unknown publisher, choose **More info** and then **Run anyway**. Release builds are signed with a self-signed certificate, so Windows cannot fully trust the signature. To remove the warning, sign releases with a trusted code-signing certificate (see [Signing release builds](#signing-release-builds)). To remove the portable app, delete the extracted folder.
-
-- ### macOS:
-Download `flashbyte-macos.dmg` from the [releases](https://github.com/iamsami101/Flashbyte/releases) page.
-
-Open the DMG, drag **flashbyte.app** into **Applications**, then launch it from Applications.
-
-If macOS blocks the app because it is not signed/notarized yet, open **System Settings > Privacy & Security** and allow Flashbyte, or right-click the app and choose **Open**.
-
-- ### iOS:
-The current iOS release artifact is an unsigned `Runner.app` zip. It is useful for CI output and local signing, but it cannot be installed on normal iPhones directly.
-
-To install on a device, build/sign from source with an Apple Developer account:
-
-```bash
-flutter build ipa --release
-```
-
-Then distribute the signed `.ipa` through TestFlight, Apple Configurator, or your own MDM/internal distribution setup.
-
-## Signing release builds
-
-The GitHub workflow builds release artifacts and packages macOS as a DMG, but platform signing requires private certificates and provisioning files that should be stored as GitHub Actions secrets.
-
-To sign Android releases, add an upload keystore and configure Gradle signing with secrets such as `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`.
-
-To sign and notarize macOS releases, use an Apple Developer ID Application certificate plus notarization credentials, commonly stored as `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64`, `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
-
-To create an installable iOS release, add an Apple Distribution certificate and provisioning profile, commonly stored as `APPLE_DISTRIBUTION_CERTIFICATE_BASE64`, `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `APPLE_TEAM_ID`.
-
-For Windows releases, the workflow currently signs both the executable and the Inno Setup installer with a fresh self-signed certificate. This keeps the binaries tamper-evident but still triggers a SmartScreen warning, because the signing certificate is not trusted. To sign with a trusted certificate, obtain a Windows code-signing certificate and use it with `signtool` in the workflow, commonly stored as `WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`.
-
-## Building from Source
-
-If you'd like to build Flashbyte yourself instead of using a prebuilt release, you'll need Flutter installed and set up for the platform(s) you're targeting.
-
-### Prerequisites
-
-- **Flutter SDK** (stable channel) — [install instructions](https://docs.flutter.dev/get-started/install)
-- **Git**
-
-Verify your setup once Flutter is installed:
-
-```bash
-flutter doctor
-```
-
-Resolve any issues it flags before continuing (missing Android SDK, missing Linux toolchain, etc. — covered per-platform below).
-
-### Clone the repository
-
-```bash
-git clone https://github.com/iamsami101/flashbyte.git
-cd flashbyte
-flutter pub get
-```
-
----
-
-### Building for Linux
-
-**Additional prerequisites:**
-
-```bash
-sudo apt update
-sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev
-```
-
-Enable Linux desktop support if you haven't already:
-
-```bash
-flutter config --enable-linux-desktop
-```
-
-Build a release binary:
-
-```bash
-flutter build linux --release
-```
-
-The output bundle will be in:
-
-```bash
-build/linux/x64/release/bundle/
-```
-
-This `bundle/` folder is exactly what gets packaged into the `.tar.gz` release — it contains `data/`, `lib/`, the `flashbyte` executable, and `share/` with icons and the desktop file. You can run it directly:
-
-```bash
-cd build/linux/x64/release/bundle
-./flashbyte
-```
-
-Or follow the [Manual Installation](#manual-installation) steps above, using this `bundle/` folder as your source instead of a downloaded release.
-
----
-
-### Building for Android
-
-**Additional prerequisites:**
-
-- Android SDK (via [Android Studio](https://developer.android.com/studio) or command-line tools)
-- A configured `ANDROID_HOME` environment variable
-- At least one accepted Android SDK license:
-
-```bash
-flutter doctor --android-licenses
-```
-
-Build a release APK:
-
-```bash
-flutter build apk --release
-```
-
-The output will be at:
-
-```bash
-build/app/outputs/flutter-apk/app-release.apk
-```
-
-Install it on a connected device or emulator:
-
-```bash
-flutter install
-```
-
-Or manually transfer the APK to your device and install it (you'll need "Install from unknown sources" enabled, since this isn't distributed via the Play Store).
-
-If you want a split APK per architecture (smaller file size):
-
-```bash
-flutter build apk --split-per-abi --release
-```
-
-This produces separate APKs in the same output folder, one per ABI (`armeabi-v7a`, `arm64-v8a`, `x86_64`).
-
----
-
-### Building for iOS
-
-**Additional prerequisites:**
-
-- macOS
-- Xcode
-- CocoaPods
-- An Apple Developer account if you want to install on a physical device or create a distributable IPA
-
-Enable iOS support and check your setup:
-
-```bash
-flutter doctor
-```
-
-Build an unsigned release app for CI/artifact inspection:
-
-```bash
-flutter build ios --release --no-codesign
-```
-
-Build a signed IPA when your Apple signing certificates and provisioning profile are configured:
-
-```bash
-flutter build ipa --release
-```
-
-The unsigned app output is usually under:
-
-```bash
-build/ios/iphoneos/Runner.app
-```
-
-The signed IPA output is usually under:
-
-```bash
-build/ios/ipa/
-```
-
----
-
-### Building for macOS
-
-**Additional prerequisites:**
-
-- macOS
-- Xcode
-- CocoaPods
-
-Enable macOS desktop support if you haven't already:
-
-```bash
-flutter config --enable-macos-desktop
-```
-
-Build a release app:
-
-```bash
-flutter build macos --release
-```
-
-The output app will be at:
-
-```bash
-build/macos/Build/Products/Release/Flashbyte.app
-```
-
-For distribution outside your own machine, sign and notarize the app, then package it as a DMG.
-
----
-
-### Building for Windows
-
-**Additional prerequisites:**
-
-- Windows
-- Visual Studio with the "Desktop development with C++" workload
-
-Enable Windows desktop support if you haven't already:
-
-```powershell
-flutter config --enable-windows-desktop
-```
-
-Build a release app:
-
-```powershell
-flutter build windows --release
-```
-
-The output bundle will be at:
-
-```powershell
-build\windows\x64\runner\Release\
-```
-
-Zip the contents of that folder to distribute a portable Windows build. A bundled [Inno Setup](https://jrsoftware.org/isinfo.php) installer script is provided at `windows/installer/flashbyte.iss`; the release workflow uses it to build a signed **Setup Wizard** (`flashbyte-windows-setup-x64.exe`). For wider distribution, sign with a trusted Windows code-signing certificate.
-
----
-
-### Debug builds
-
-For development/testing rather than a release build, drop `--release` and just run:
-
-```bash
-flutter run
-```
-
-Flutter will detect any connected device (or ask you to choose one) and hot-reload as you make changes.
+name: Build and Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.47.7"
+          cache: true
+
+      - name: Move source to F-Droid build path
+        run: |
+          sudo mkdir -p /home/vagrant/build
+          sudo chown -R "$(whoami)" /home/vagrant
+          cp -a "${GITHUB_WORKSPACE}/." /home/vagrant/build/com.flashbyte/
+
+      - name: Install dependencies
+        working-directory: /home/vagrant/build/com.flashbyte
+        env:
+          PUB_CACHE: /home/vagrant/build/com.flashbyte/.pub-cache
+        run: |
+          flutter config --no-analytics
+          flutter pub get --enforce-lockfile
+
+      - name: Decode Android signing keystore
+        working-directory: /home/vagrant/build/com.flashbyte
+        run: echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > android/app/flashbyte-release.jks
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Build APK
+        working-directory: /home/vagrant/build/com.flashbyte
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PUB_CACHE: /home/vagrant/build/com.flashbyte/.pub-cache
+        run: flutter build apk --release
+
+      - name: Build split APKs
+        working-directory: /home/vagrant/build/com.flashbyte
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PUB_CACHE: /home/vagrant/build/com.flashbyte/.pub-cache
+        run: flutter build apk --release --split-per-abi
+
+      - name: Build app bundle
+        working-directory: /home/vagrant/build/com.flashbyte
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PUB_CACHE: /home/vagrant/build/com.flashbyte/.pub-cache
+        run: flutter build appbundle --release
+
+      - name: Collect Android artifacts
+        working-directory: /home/vagrant/build/com.flashbyte
+        run: |
+          mkdir -p release/android
+          cp build/app/outputs/flutter-apk/app-release.apk release/android/flashbyte-android.apk
+          cp build/app/outputs/bundle/release/app-release.aab release/android/flashbyte-android.aab
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release/android/flashbyte-android-armeabi-v7a.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release/android/flashbyte-android-arm64-v8a.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk release/android/flashbyte-android-x86_64.apk
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: /home/vagrant/build/com.flashbyte/release/android/*
+
+  build-linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake libgtk-3-dev ninja-build pkg-config
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.47.7"
+          cache: true
+
+      - name: Enable Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux
+        run: flutter build linux --release
+
+      - name: Package Linux
+        run: |
+          mkdir -p release/linux
+          tar -czf release/linux/flashbyte-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: release/linux/*
+
+  build-windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.47.7"
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows
+        run: flutter build windows --release
+
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release/windows
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath release/windows/flashbyte-windows-x64.zip -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Download Inno Setup Chinese Language File
+        shell: pwsh
+        run: |
+          $langDir = "C:\Program Files (x86)\Inno Setup 6\Languages"
+          New-Item -ItemType Directory -Force -Path $langDir | Out-Null
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl" -OutFile "$langDir\ChineseSimplified.isl" -UseBasicParsing
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace '^version:\s*', ''
+          $version = $version.Split('+')[0]
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" -ErrorAction Stop | Select-Object -First 1
+          & $iscc.FullName "/DMyAppVersion=$version" windows/installer/flashbyte.iss
+          Copy-Item build/installer/flashbyte-windows-setup-x64.exe release/windows/flashbyte-windows-setup-x64.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release/windows/*
+
+  build-apple:
+    name: iOS and macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.47.7"
+          cache: true
+
+      - name: Enable macOS desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Build macOS
+        run: flutter build macos --release
+
+      - name: Create macOS DMG
+        uses: L-Super/create-dmg-actions@v1.0.3
+        with:
+          dmg_name: flashbyte-macos
+          src_dir: build/macos/Build/Products/Release/flashbyte.app
+
+      - name: Package Apple artifacts
+        run: |
+          mkdir -p release/apple
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app release/apple/flashbyte-ios-unsigned-runner-app.zip
+          dmg_path="$(find . -maxdepth 3 -name 'flashbyte-macos*.dmg' -print -quit)"
+          if [ -z "$dmg_path" ]; then
+            echo "flashbyte-macos DMG was not created"
+            find . -maxdepth 3 -name '*.dmg' -print
+            exit 1
+          fi
+          cp "$dmg_path" release/apple/flashbyte-macos.dmg
+
+      - name: Upload Apple artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple
+          path: release/apple/*
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-android
+      - build-linux
+      - build-windows
+      - build-apple
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Read app version
+        id: app-version
+        run: |
+          version="$(grep '^version:' pubspec.yaml | awk '{print $2}')"
+          versionName="${version%%+*}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${versionName}" >> "$GITHUB_OUTPUT"
+
+      - name: Remove existing release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.app-version.outputs.tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          for asset in \
+            flashbyte-android.apk \
+            flashbyte-android.aab \
+            flashbyte-android-11.apk \
+            flashbyte-android-12.apk \
+            flashbyte-android-13.apk \
+            flashbyte-android-armeabi-v7a.apk \
+            flashbyte-android-arm64-v8a.apk \
+            flashbyte-android-x86_64.apk \
+            flashbyte-linux-x64.tar.gz \
+            flashbyte-windows-x64.zip \
+            flashbyte-windows-setup-x64.exe \
+            flashbyte-macos.dmg \
+            flashbyte-ios-unsigned-runner-app.zip
+          do
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes 2>/dev/null || true
+          done
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.app-version.outputs.tag }}
+          name: ${{ steps.app-version.outputs.tag }}
+          body: |
+            ${{ steps.app-version.outputs.tag }}
+
+            Commit: `${{ github.sha }}`.
+
+            Artifacts:
+            - Android APK and AAB
+            - Linux x64 bundle
+            - Windows x64 installer and portable ZIP
+            - macOS DMG
+            - unsigned iOS Runner.app bundle
+          files: release-assets/**/*
+          fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Commit README release links
+        if: github.ref == 'refs/heads/main'
+        env:
+          RELEASE_TAG: ${{ steps.app-version.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+
+            python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import textwrap
+
+          readme_files = [Path("README.md"), Path("README-en.md")]
+          start = "<!-- BEGIN AUTO RELEASE DOWNLOADS -->"
+          end = "<!-- END AUTO RELEASE DOWNLOADS -->"
+          tag = os.environ["RELEASE_TAG"]
+          repo = os.environ["REPOSITORY"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+
+          for readme in readme_files:
+              if not readme.exists():
+                  continue
+              text = readme.read_text()
+              if start not in text or end not in text:
+                  continue
+              section_en = textwrap.dedent(f"""\
+              {start}
+              | Platform | Download |
+              |----------|----------|
+              | Android | [APK]({base}/flashbyte-android.apk) \\| [AAB]({base}/flashbyte-android.aab) |
+              | Linux | [TAR]({base}/flashbyte-linux-x64.tar.gz) |
+              | macOS | [DMG]({base}/flashbyte-macos.dmg) |
+              | iOS | [APP]({base}/flashbyte-ios-unsigned-runner-app.zip) |
+              | Windows | [EXE]({base}/flashbyte-windows-setup-x64.exe) \\| [ZIP]({base}/flashbyte-windows-x64.zip) |
+              {end}""")
+              section_zh = textwrap.dedent(f"""\
+              {start}
+              | 平台 | 下载 |
+              |----------|----------|
+              | Android | [APK]({base}/flashbyte-android.apk) \\| [AAB]({base}/flashbyte-android.aab) |
+              | Linux | [TAR]({base}/flashbyte-linux-x64.tar.gz) |
+              | macOS | [DMG]({base}/flashbyte-macos.dmg) |
+              | iOS | [APP]({base}/flashbyte-ios-unsigned-runner-app.zip) |
+              | Windows | [EXE]({base}/flashbyte-windows-setup-x64.exe) \\| [ZIP]({base}/flashbyte-windows-x64.zip) |
+              {end}""")
+              section = section_zh if readme.name == "README.md" else section_en
+              before, marker, rest = text.partition(start)
+              if not marker:
+                  continue
+              _, marker, after = rest.partition(end)
+              if not marker:
+                  continue
+              readme.write_text(before + section + after)
+          PY
+
+            if git diff --quiet README.md README-en.md; then
+              exit 0
+            fi
+
+            git add README.md README-en.md
+            git commit -m "docs: update release downloads [skip ci]"
+
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+
+            git reset --hard HEAD~1
+          done
+
+          echo "Could not push README release links after 3 attempts."
+          exit 1
