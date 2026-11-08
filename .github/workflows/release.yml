@@ -152,25 +152,57 @@ jobs:
       - name: Build Windows
         run: flutter build windows --release
 
-      - name: Create self-signed code signing certificate
+      # 解码 WINDOWS_CERTIFICATE_BASE64 并落盘为临时 PFX，导入当前用户的个人证书存储，
+      # 导入后立即删除临时 PFX 以减少私钥在 runner 磁盘上的残留；
+      # 将导入证书的指纹写入 GITHUB_ENV，供后续签名步骤按指纹精确取用。
+      - name: Import Windows code signing certificate
         shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          $cert = New-SelfSignedCertificate `
-            -Type CodeSigningCert `
-            -Subject "CN=Flashbyte" `
-            -FriendlyName "Flashbyte Release Signing" `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -KeyUsage DigitalSignature `
-            -KeyExportPolicy Exportable `
-            -NotAfter (Get-Date).AddYears(5) `
-            -ErrorAction Stop
-          Write-Host "Created certificate thumbprint: $($cert.Thumbprint)"
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            throw "WINDOWS_CERTIFICATE_BASE64 secret is not set"
+          }
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD secret is not set"
+          }
 
+          $pfxPath = Join-Path $env:RUNNER_TEMP "flashbyte-release.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+
+          $securePassword = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          try {
+            $cert = Import-PfxCertificate `
+              -FilePath $pfxPath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $securePassword `
+              -ErrorAction Stop
+          } finally {
+            Remove-Item -Force $pfxPath -ErrorAction SilentlyContinue
+          }
+
+          if (-not $cert.HasPrivateKey) {
+            throw "Imported certificate has no private key; a PFX with private key is required"
+          }
+          Write-Host "Imported certificate thumbprint: $($cert.Thumbprint)"
+          Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)"
+
+      # 按 WINDOWS_CERT_THUMBPRINT 从个人证书存储精确取出证书，
+      # 对 flashbyte.exe 做 Authenticode 签名；时间戳服务器不可用时降级为无时间戳签名，
+      # 最后校验签名状态为 Valid，避免未签名产物被继续打包。
       - name: Sign Flashbyte executable
         shell: pwsh
         run: |
-          $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Subject -match "Flashbyte" } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_THUMBPRINT)) {
+            throw "WINDOWS_CERT_THUMBPRINT is not set; certificate import step may have failed"
+          }
+          $cert = Get-ChildItem Cert:\CurrentUser\My |
+            Where-Object { $_.Thumbprint -eq $env:WINDOWS_CERT_THUMBPRINT } |
+            Select-Object -First 1
           if ($null -eq $cert) { throw "Flashbyte signing certificate not found" }
+          if (-not $cert.HasPrivateKey) { throw "Flashbyte signing certificate has no private key" }
+
           $exe = "build/windows/x64/runner/Release/flashbyte.exe"
           try {
             Set-AuthenticodeSignature -FilePath $exe -Certificate $cert -HashAlgorithm SHA256 -TimestampServer "http://timestamp.digicert.com" -ErrorAction Stop | Out-Null
@@ -178,7 +210,9 @@ jobs:
             Write-Warning "Timestamp server unavailable; signing without timestamp: $($_.Exception.Message)"
             Set-AuthenticodeSignature -FilePath $exe -Certificate $cert -HashAlgorithm SHA256 -ErrorAction Stop | Out-Null
           }
-          Write-Host "flashbyte.exe signature status: $((Get-AuthenticodeSignature -FilePath $exe).Status)"
+          $sig = Get-AuthenticodeSignature -FilePath $exe
+          Write-Host "flashbyte.exe signature status: $($sig.Status)"
+          if ($sig.Status -ne "Valid") { throw "flashbyte.exe signature is not valid: $($sig.Status)" }
 
       - name: Package Windows ZIP
         shell: pwsh
@@ -199,11 +233,19 @@ jobs:
           & $iscc.FullName "/DMyAppVersion=$version" windows/installer/flashbyte.iss
           Copy-Item build/installer/flashbyte-windows-setup-x64.exe release/windows/flashbyte-windows-setup-x64.exe
 
+      # 与 flashbyte.exe 使用同一张固定证书，对安装包做 Authenticode 签名；
+      # 同样在时间戳不可用时降级，并校验签名状态为 Valid。
       - name: Sign Windows installer
         shell: pwsh
         run: |
-          $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Subject -match "Flashbyte" } | Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_THUMBPRINT)) {
+            throw "WINDOWS_CERT_THUMBPRINT is not set; certificate import step may have failed"
+          }
+          $cert = Get-ChildItem Cert:\CurrentUser\My |
+            Where-Object { $_.Thumbprint -eq $env:WINDOWS_CERT_THUMBPRINT } |
+            Select-Object -First 1
           if ($null -eq $cert) { throw "Flashbyte signing certificate not found" }
+
           $installer = "release/windows/flashbyte-windows-setup-x64.exe"
           try {
             Set-AuthenticodeSignature -FilePath $installer -Certificate $cert -HashAlgorithm SHA256 -TimestampServer "http://timestamp.digicert.com" -ErrorAction Stop | Out-Null
@@ -211,7 +253,9 @@ jobs:
             Write-Warning "Timestamp server unavailable; signing without timestamp: $($_.Exception.Message)"
             Set-AuthenticodeSignature -FilePath $installer -Certificate $cert -HashAlgorithm SHA256 -ErrorAction Stop | Out-Null
           }
-          Write-Host "installer signature status: $((Get-AuthenticodeSignature -FilePath $installer).Status)"
+          $sig = Get-AuthenticodeSignature -FilePath $installer
+          Write-Host "installer signature status: $($sig.Status)"
+          if ($sig.Status -ne "Valid") { throw "installer signature is not valid: $($sig.Status)" }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
