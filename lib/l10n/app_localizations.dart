@@ -405,6 +405,50 @@ class AppLocalizations {
       : 'Permission was denied. Check file or folder permissions and try again.';
   String get somethingWentWrong => isZh ? '出了点问题。' : 'Something went wrong.';
 }
+  /// 将 [UserFacingError.from] 产生的英文消息映射为当前语言。
+  /// 未匹配的中文或未知英文原样返回。
+  String localizeError(String englishMessage) {
+    if (!isZh) return englishMessage;
+    final l = englishMessage.toLowerCase();
+    if (l.contains('connection setup was interrupted')) {
+      return connectionSetupInterrupted;
+    }
+    if (l.contains('disconnected before the transfer finished') ||
+        l.contains('disconnected unexpectedly')) {
+      return otherDeviceDisconnected;
+    }
+    if (l.contains('could not reach the receiver')) {
+      return couldNotReachReceiver;
+    }
+    if (l.contains('does not look valid')) {
+      return invalidIpAddress;
+    }
+    if (l.contains('tls settings do not match') ||
+        l.contains('tls enabled') ||
+        l.contains('tls disabled')) {
+      return tlsSettingsMismatch;
+    }
+    if (l.contains('tls certificate could not be loaded')) {
+      return tlsCertificateLoadFailed;
+    }
+    if (l.contains('connection is not active')) {
+      return connectionNotActive;
+    }
+    if (l.contains('selected file could not be read')) {
+      return selectedFileCouldNotBeRead;
+    }
+    if (l.contains('received file could not be saved')) {
+      return receivedFileCouldNotBeSaved;
+    }
+    if (l.contains('permission was denied')) {
+      return permissionDeniedGeneric;
+    }
+    if (l.contains('something went wrong')) {
+      return somethingWentWrong;
+    }
+    return englishMessage;
+  }
+}
 
 class _AppLocalizationsDelegate
     extends LocalizationsDelegate<AppLocalizations> {
