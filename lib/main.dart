@@ -15,7 +15,6 @@ import 'package:flashbyte/app/controllers/app_appearance_controller.dart';
 import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/features/settings/settings_page.dart';
@@ -23,6 +22,7 @@ import 'package:flashbyte/features/transfers/pages/file_selection_page.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:heroine/heroine.dart';
 import 'package:material_new_shapes/material_new_shapes.dart';
 import 'package:motor/motor.dart';
@@ -94,6 +94,7 @@ Future<void> main() async {
   }
   await AppAppearanceController.instance.load();
   await AppMotionController.instance.load();
+  await AppLocaleController.instance.load();
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
@@ -210,6 +211,7 @@ class _StartupEffectsState extends State<StartupEffects> {
       return;
     }
 
+    final l10n = AppLocalizations.of(context);
     var doNotShowAgain = false;
     final shouldOpenSettings = await showDialog<bool>(
       context: context,
@@ -217,20 +219,16 @@ class _StartupEffectsState extends State<StartupEffects> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Allow background transfers'),
+              title: Text(l10n.allowBackgroundTransfers),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Disable battery optimization for Flashbyte so active '
-                    'connections and file transfers can keep running in the '
-                    'background.',
-                  ),
+                  Text(l10n.batteryOptimizationMessage),
                   const SizedBox(height: 12),
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     value: doNotShowAgain,
-                    title: const Text('Do not show again'),
+                    title: Text(l10n.doNotShowAgain),
                     subtitle: null,
                     onChanged: (value) {
                       setDialogState(() {
@@ -243,13 +241,13 @@ class _StartupEffectsState extends State<StartupEffects> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Not now'),
+                  child: Text(l10n.notNow),
                 ),
                 FilledButton(
                   onPressed: doNotShowAgain
                       ? null
                       : () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('Disable'),
+                  child: Text(l10n.disable),
                 ),
               ],
             );
@@ -275,7 +273,7 @@ class _StartupEffectsState extends State<StartupEffects> {
         await AwesomeNotifications().requestPermissionToSendNotifications();
       }
     } catch (_) {
-      // Notifications not supported on this platform (Windows, Linux, etc.)
+      // 此平台不支持通知
     }
   }
 
@@ -354,6 +352,7 @@ class _StartPageState extends State<StartPage> {
   }
 
   Widget _buildMobileHome() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final primaryColor = colorScheme.primary;
     final brightness = Theme.of(context).brightness;
@@ -397,7 +396,7 @@ class _StartPageState extends State<StartPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      AppLocalizations.of(context).appTitle,
+                      l10n.appTitle,
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.5,
@@ -405,7 +404,7 @@ class _StartPageState extends State<StartPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      AppLocalizations.of(context).localFileSharing,
+                      l10n.localFileSharing,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -436,16 +435,16 @@ class _StartPageState extends State<StartPage> {
                   children: [
                     _HomeActionCard(
                       icon: Icons.north_east_rounded,
-                      title: AppLocalizations.of(context).sendFiles,
-                      subtitle: AppLocalizations.of(context).chooseFilesToShare,
+                      title: l10n.sendFiles,
+                      subtitle: l10n.chooseFilesToShare,
                       backgroundColor: colorScheme.surfaceContainerHighest,
                       foregroundColor: colorScheme.onSurface,
                       onTap: () => _openSharing(0),
                     ),
                     _HomeActionCard(
                       icon: Icons.south_west_rounded,
-                      title: AppLocalizations.of(context).receiveFiles,
-                      subtitle: AppLocalizations.of(context).waitForSender,
+                      title: l10n.receiveFiles,
+                      subtitle: l10n.waitForSender,
                       backgroundColor: colorScheme.primary,
                       foregroundColor: colorScheme.onPrimary,
                       onTap: () => _openSharing(1),
@@ -474,7 +473,7 @@ class _StartPageState extends State<StartPage> {
                   child: TextButton.icon(
                     onPressed: _openSettings,
                     icon: const Icon(Icons.settings_rounded, size: 20),
-                    label: Text(AppLocalizations.of(context).settings),
+                    label: Text(l10n.settings),
                     style: TextButton.styleFrom(
                       foregroundColor: colorScheme.onSurfaceVariant,
                       padding: const EdgeInsets.symmetric(
@@ -507,6 +506,7 @@ class _StartPageState extends State<StartPage> {
   }
 
   Widget _buildDesktopHome() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return ColoredBox(
@@ -529,7 +529,7 @@ class _StartPageState extends State<StartPage> {
                         _maybeAnimate(
                           context,
                           Text(
-                            AppLocalizations.of(context).appTitle,
+                            l10n.appTitle,
                             style: Theme.of(context).textTheme.displayMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
@@ -547,7 +547,7 @@ class _StartPageState extends State<StartPage> {
                         _maybeAnimate(
                           context,
                           Text(
-                            AppLocalizations.of(context).shareFilesDescription,
+                            l10n.shareFilesDescription,
                             style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(
                                   color: colorScheme.onSurfaceVariant,
@@ -561,7 +561,7 @@ class _StartPageState extends State<StartPage> {
                         ),
                         const Spacer(),
                         Text(
-                          "Start a transfer",
+                          l10n.startTransfer,
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(
                                 fontWeight: FontWeight.w600,
@@ -575,8 +575,8 @@ class _StartPageState extends State<StartPage> {
                               Expanded(
                                 child: _HomeActionCard(
                                   icon: Icons.north_east_rounded,
-                                  title: "Send files",
-                                  subtitle: "Choose files",
+                                  title: l10n.sendFiles,
+                                  subtitle: l10n.chooseFiles,
                                   backgroundColor:
                                       colorScheme.surfaceContainerHighest,
                                   foregroundColor: colorScheme.onSurface,
@@ -587,8 +587,8 @@ class _StartPageState extends State<StartPage> {
                               Expanded(
                                 child: _HomeActionCard(
                                   icon: Icons.south_west_rounded,
-                                  title: "Receive files",
-                                  subtitle: "Wait for a sender",
+                                  title: l10n.receiveFiles,
+                                  subtitle: l10n.waitForSender,
                                   backgroundColor: colorScheme.primary,
                                   foregroundColor: colorScheme.onPrimary,
                                   onTap: () => _openSharing(1),
@@ -616,7 +616,7 @@ class _StartPageState extends State<StartPage> {
                             child: FilledButton.tonalIcon(
                               onPressed: _openSettings,
                               icon: const Icon(Icons.settings_rounded),
-                              label: const Text("Settings"),
+                              label: Text(l10n.settings),
                             ),
                           ),
                           (child) => child
@@ -804,7 +804,7 @@ class _StartPageState extends State<StartPage> {
               border: Border.all(color: colorScheme.surface, width: 2),
             ),
             child: Text(
-              'You',
+              AppLocalizations.of(context).isZh ? '我' : 'You',
               style: TextStyle(
                 color: colorScheme.onPrimary,
                 fontSize: 10,
