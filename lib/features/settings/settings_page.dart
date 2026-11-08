@@ -2,9 +2,7 @@ import 'dart:async';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/controllers/app_appearance_controller.dart';
-import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
-import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
@@ -31,6 +29,7 @@ class _SettingsPageState extends State<SettingsPage> {
   final AppAppearanceController _appearanceController =
       AppAppearanceController.instance;
   final AppMotionController _motionController = AppMotionController.instance;
+  final AppLocaleController _localeController = AppLocaleController.instance;
 
   bool _useTLS = true;
   bool _isLoading = true;
@@ -98,7 +97,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     Icons.info_rounded,
                     color: Theme.of(ctx).colorScheme.primary,
                   ),
-                  const Text('TLS Encryption'),
+                  Text(AppLocalizations.of(ctx).tlsDialogTitle),
                 ],
               ),
               content: Column(
@@ -106,15 +105,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 spacing: 10,
                 children: [
-                  const Text(
-                    'When TLS is disabled, both the sending and receiving device must have the same setting.\n\n'
-                    'Make sure the other device also has TLS turned OFF, otherwise the connection will fail.',
-                  ),
+                  Text(AppLocalizations.of(ctx).tlsDialogContent),
                   CheckboxListTile(
                     value: dontShowChecked,
                     onChanged: (v) =>
                         setDialogState(() => dontShowChecked = v!),
-                    title: const Text("Don't show this again"),
+                    title: Text(AppLocalizations.of(ctx).dontShowAgain),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                   ),
@@ -123,7 +119,7 @@ class _SettingsPageState extends State<SettingsPage> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Continue'),
+                  child: Text(AppLocalizations.of(ctx).continueText),
                 ),
               ],
             ),
@@ -165,8 +161,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _portController.text = (await AppSettings.getPort()).toString();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Port must be between 1 and 65535.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).portRangeError),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -225,8 +221,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final folderPath = pickedFolder.path;
     if (folderPath == null || folderPath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('That folder cannot be used on this device.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).folderUnavailable),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -295,16 +291,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    "Appearance",
+                    AppLocalizations.of(context).appearance,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 ListTile(
-                  title: const Text("Dark Mode"),
+                  title: Text(AppLocalizations.of(context).darkMode),
                   subtitle: Text(
                     _appearanceController.isAmoled
-                        ? "Always on for the AMOLED theme."
-                        : "Use the app's dark theme instead of the light theme.",
+                        ? AppLocalizations.of(context).darkModeAmoledSubtitle
+                        : AppLocalizations.of(context).darkModeSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _appearanceController.useDarkMode,
@@ -318,9 +314,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: const Text("Reduce Animations"),
-                  subtitle: const Text(
-                    "Reduce motion across the app.",
+                  title: Text(AppLocalizations.of(context).reduceAnimations),
+                  subtitle: Text(
+                    AppLocalizations.of(context).reduceAnimationsSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _motionController.disableAnimations,
@@ -328,9 +324,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: const Text("Static Receive Shape"),
-                  subtitle: const Text(
-                    "Stop only the large spinning shape on the receive tab.",
+                  title: Text(AppLocalizations.of(context).staticReceiveShape),
+                  subtitle: Text(
+                    AppLocalizations.of(context).staticReceiveShapeSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _motionController.disableReceiveShapeAnimation,
@@ -338,9 +334,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: const Text("Material You Dynamic Colors"),
-                  subtitle: const Text(
-                    "Use the device wallpaper color scheme when supported.",
+                  title: Text(AppLocalizations.of(context).dynamicColors),
+                  subtitle: Text(
+                    AppLocalizations.of(context).dynamicColorsSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _appearanceController.useDynamicColors,
@@ -362,7 +358,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       final isAmoledEntry = entry.key == 'amoled';
                       return ChoiceChip(
                         label: Text(
-                          isAmoledEntry ? 'AMOLED' : _capitalize(entry.key),
+                          isAmoledEntry
+                              ? AppLocalizations.of(context).amoled
+                              : _capitalize(entry.key),
                         ),
                         selected: isSelected,
                         onSelected: _appearanceController.useDynamicColors
@@ -392,16 +390,55 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    "Connection",
+                    AppLocalizations.of(context).language,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 ListTile(
-                  title: const Text("TLS Encryption"),
+                  title: Text(AppLocalizations.of(context).language),
+                  subtitle: Text(
+                    switch (_localeController.languageCode) {
+                      'zh' => AppLocalizations.of(context).languageChinese,
+                      'en' => AppLocalizations.of(context).languageEnglish,
+                      _ => AppLocalizations.of(context).languageSystem,
+                    },
+                  ),
+                  trailing: DropdownButton<String>(
+                    value: _localeController.languageCode,
+                    onChanged: (value) {
+                      if (value != null) {
+                        _localeController.setLanguage(value);
+                      }
+                    },
+                    items: [
+                      DropdownMenuItem(
+                        value: 'system',
+                        child: Text(AppLocalizations.of(context).languageSystem),
+                      ),
+                      DropdownMenuItem(
+                        value: 'zh',
+                        child: Text(AppLocalizations.of(context).languageChinese),
+                      ),
+                      DropdownMenuItem(
+                        value: 'en',
+                        child: Text(AppLocalizations.of(context).languageEnglish),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: Text(
+                    AppLocalizations.of(context).connection,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                ListTile(
+                  title: Text(AppLocalizations.of(context).tlsEncryption),
                   subtitle: Text(
                     widget.locked
-                        ? "Disconnect before changing TLS settings."
-                        : "Encrypt transfers with a unique certificate generated on this device.",
+                        ? AppLocalizations.of(context).disconnectBeforeTls
+                        : AppLocalizations.of(context).tlsEncryptionSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _useTLS,
@@ -409,11 +446,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: const Text("Port"),
+                  title: Text(AppLocalizations.of(context).port),
                   subtitle: Text(
                     widget.locked
-                        ? "Disconnect before changing the connection port."
-                        : "Used for both hosting and connecting.",
+                        ? AppLocalizations.of(context).disconnectBeforePort
+                        : AppLocalizations.of(context).portSubtitle,
                   ),
                   trailing: SizedBox(
                     width: 96,
@@ -437,11 +474,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: const Text("Download Folder"),
+                  title: Text(AppLocalizations.of(context).downloadFolder),
                   subtitle: Text(
                     widget.locked
-                        ? "Disconnect before changing the destination folder."
-                        : "Files received on this device will be saved here.",
+                        ? AppLocalizations.of(context).disconnectBeforeFolder
+                        : AppLocalizations.of(context).downloadFolderSubtitle,
                   ),
                   trailing: SizedBox(
                     width: 260,
@@ -457,7 +494,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: 'Reset folder',
+                              tooltip: AppLocalizations.of(context).resetFolder,
                               onPressed: widget.locked
                                   ? null
                                   : _resetDownloadDirectory,
@@ -474,14 +511,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    "Trusted devices",
+                    AppLocalizations.of(context).trustedDevices,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                   child: Text(
-                    "Senders marked as trusted are automatically accepted when they send files.",
+                    AppLocalizations.of(context).trustedDevicesDescription,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -492,11 +529,11 @@ class _SettingsPageState extends State<SettingsPage> {
                       TrustedDevicesService.instance.devicesNotifier,
                   builder: (context, trustedDevices, _) {
                     if (trustedDevices.isEmpty) {
-                      return const ListTile(
-                        leading: Icon(Icons.shield_outlined),
-                        title: Text("No trusted devices"),
+                      return ListTile(
+                        leading: const Icon(Icons.shield_outlined),
+                        title: Text(AppLocalizations.of(context).noTrustedDevices),
                         subtitle: Text(
-                          "Check “Always accept files from…” on the incoming files screen to trust a sender.",
+                          AppLocalizations.of(context).noTrustedDevicesSubtitle,
                         ),
                       );
                     }
@@ -513,7 +550,8 @@ class _SettingsPageState extends State<SettingsPage> {
                               style: const TextStyle(fontSize: 12),
                             ),
                             trailing: IconButton(
-                              tooltip: 'Remove from trusted devices',
+                              tooltip: AppLocalizations.of(context)
+                                  .removeTrustedDevice,
                               onPressed: () => unawaited(
                                 TrustedDevicesService.instance.removeTrusted(
                                   device.fingerprint,
