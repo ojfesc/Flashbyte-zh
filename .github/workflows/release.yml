@@ -326,37 +326,54 @@ jobs:
           import os
           import textwrap
 
-          readme = Path("README.md")
-          text = readme.read_text()
+          readme_files = [Path("README.md"), Path("README-en.md")]
           start = "<!-- BEGIN AUTO RELEASE DOWNLOADS -->"
           end = "<!-- END AUTO RELEASE DOWNLOADS -->"
           tag = os.environ["RELEASE_TAG"]
           repo = os.environ["REPOSITORY"]
           base = f"https://github.com/{repo}/releases/download/{tag}"
-          section = textwrap.dedent(f"""\
-          {start}
-          | Platform | Download |
-          |----------|----------|
-          | Android | [APK]({base}/flashbyte-android.apk) \\| [AAB]({base}/flashbyte-android.aab) |
-          | Linux | [TAR]({base}/flashbyte-linux-x64.tar.gz) |
-          | macOS | [DMG]({base}/flashbyte-macos.dmg) |
-          | iOS | [APP]({base}/flashbyte-ios-unsigned-runner-app.zip) |
-          | Windows | [EXE]({base}/flashbyte-windows-setup-x64.exe) \\| [ZIP]({base}/flashbyte-windows-x64.zip) |
-          {end}""")
-          before, marker, rest = text.partition(start)
-          if not marker:
-              raise SystemExit("README release download start marker not found")
-          _, marker, after = rest.partition(end)
-          if not marker:
-              raise SystemExit("README release download end marker not found")
-          readme.write_text(before + section + after)
+
+          for readme in readme_files:
+              if not readme.exists():
+                  continue
+              text = readme.read_text()
+              if start not in text or end not in text:
+                  continue
+              section_en = textwrap.dedent(f"""\
+              {start}
+              | Platform | Download |
+              |----------|----------|
+              | Android | [APK]({base}/flashbyte-android.apk) \\| [AAB]({base}/flashbyte-android.aab) |
+              | Linux | [TAR]({base}/flashbyte-linux-x64.tar.gz) |
+              | macOS | [DMG]({base}/flashbyte-macos.dmg) |
+              | iOS | [APP]({base}/flashbyte-ios-unsigned-runner-app.zip) |
+              | Windows | [EXE]({base}/flashbyte-windows-setup-x64.exe) \\| [ZIP]({base}/flashbyte-windows-x64.zip) |
+              {end}""")
+              section_zh = textwrap.dedent(f"""\
+              {start}
+              | 平台 | 下载 |
+              |----------|----------|
+              | Android | [APK]({base}/flashbyte-android.apk) \\| [AAB]({base}/flashbyte-android.aab) |
+              | Linux | [TAR]({base}/flashbyte-linux-x64.tar.gz) |
+              | macOS | [DMG]({base}/flashbyte-macos.dmg) |
+              | iOS | [APP]({base}/flashbyte-ios-unsigned-runner-app.zip) |
+              | Windows | [EXE]({base}/flashbyte-windows-setup-x64.exe) \\| [ZIP]({base}/flashbyte-windows-x64.zip) |
+              {end}""")
+              section = section_zh if readme.name == "README.md" else section_en
+              before, marker, rest = text.partition(start)
+              if not marker:
+                  continue
+              _, marker, after = rest.partition(end)
+              if not marker:
+                  continue
+              readme.write_text(before + section + after)
           PY
 
-            if git diff --quiet README.md; then
+            if git diff --quiet README.md README-en.md; then
               exit 0
             fi
 
-            git add README.md
+            git add README.md README-en.md
             git commit -m "docs: update release downloads [skip ci]"
 
             if git push origin "HEAD:${GITHUB_REF_NAME}"; then
