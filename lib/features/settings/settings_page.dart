@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/controllers/app_appearance_controller.dart';
+import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
