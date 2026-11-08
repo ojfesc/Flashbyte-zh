@@ -110,7 +110,12 @@ class WindowStateManager with WindowListener {
   }
 
   /// 检查保存的位置是否仍落在某块显示器的可见区域内。
-  /// 显示器断开或分辨率变化时回退到居中，避免窗口出现在屏幕外。
+  ///
+  /// `screen_retriever` 的 `Display` 只暴露 `size`（非空）、
+  /// `visiblePosition`（可空）与 `visibleSize`（可空）。
+  /// `visiblePosition` 缺失时无法可靠推断该显示器在工作区中的偏移，
+  /// 因此跳过；若所有显示器都缺 `visiblePosition`（典型 Wayland），
+  /// 则无法判断位置是否越界，保留上次位置比强制居中更符合预期。
   Future<bool> _isOnScreen(
     double x,
     double y,
@@ -122,10 +127,12 @@ class WindowStateManager with WindowListener {
       if (displays.isEmpty) return false;
 
       final windowRect = Rect.fromLTWH(x, y, width, height);
+      var hasUsableGeometry = false;
       for (final display in displays) {
-        // visiblePosition 和 visibleSize 在某些平台可能为空，
-        // 回退到显示器的完整 position 和 size。
-        final position = display.visiblePosition ?? display.position;
+        final position = display.visiblePosition;
+        if (position == null) continue;
+
+        hasUsableGeometry = true;
         final size = display.visibleSize ?? display.size;
         final displayRect = Rect.fromLTWH(
           position.dx,
@@ -135,10 +142,14 @@ class WindowStateManager with WindowListener {
         );
         if (displayRect.overlaps(windowRect)) return true;
       }
+
+      // 有可用几何信息但全部不重叠，说明窗口位置已越界，回退居中。
+      // 所有显示器都缺几何信息时返回 true，保留上次位置。
+      return !hasUsableGeometry;
     } catch (_) {
-      // 某些 Wayland 环境无法读取显示器信息，回退到居中。
+      // 某些 Wayland 环境无法读取显示器信息，回退到居中更安全。
+      return false;
     }
-    return false;
   }
 
   void _scheduleSave() {
