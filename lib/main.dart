@@ -7,6 +7,7 @@ import 'package:disable_battery_optimization/disable_battery_optimization.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/models/discovered_device.dart';
+import 'package:flashbyte/platform/window_state_manager.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
 import 'package:flashbyte/services/platform/android_connection_notification_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
@@ -27,7 +28,8 @@ import 'package:heroine/heroine.dart';
 import 'package:material_new_shapes/material_new_shapes.dart';
 import 'package:motor/motor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:window_manager/window_manager.dart';
+
+WindowStateManager? _windowStateManager;
 
 @pragma('vm:entry-point')
 Future<void> onNotificationActionReceived(ReceivedAction receivedAction) async {
@@ -47,21 +49,14 @@ Future<void> onNotificationDismissed(ReceivedAction receivedAction) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 读取语言设置，使通知渠道名称与描述匹配应用语言。
-  final languageCode = await AppSettings.getLanguage();
-  final isZh = languageCode == 'zh' ||
-      (languageCode == 'system' &&
-          Platform.localeName.toLowerCase().startsWith('zh'));
-
   await AwesomeNotifications().initialize(
     'resource://drawable/ic_notification',
     [
       NotificationChannel(
         channelKey: 'tcp_connection_service',
-        channelName: isZh ? 'TCP 连接服务' : 'TCP connection service',
-        channelDescription: isZh
-            ? '当 Flashbyte 有活动 TCP 连接时显示。'
-            : 'Shows when Flashbyte has an active TCP connection.',
+        channelName: 'TCP connection service',
+        channelDescription:
+            'Shows when Flashbyte has an active TCP connection.',
         channelShowBadge: false,
         importance: NotificationImportance.Min,
         playSound: false,
@@ -70,10 +65,8 @@ Future<void> main() async {
       ),
       NotificationChannel(
         channelKey: 'file_transfer_progress',
-        channelName: isZh ? '文件传输进度' : 'File transfer progress',
-        channelDescription: isZh
-            ? '显示活动的 Flashbyte 文件传输进度。'
-            : 'Shows active Flashbyte file transfer progress.',
+        channelName: 'File transfer progress',
+        channelDescription: 'Shows active Flashbyte file transfer progress.',
         channelShowBadge: false,
         importance: NotificationImportance.High,
         playSound: false,
@@ -82,10 +75,8 @@ Future<void> main() async {
       ),
       NotificationChannel(
         channelKey: 'file_offers',
-        channelName: isZh ? '文件请求' : 'File offers',
-        channelDescription: isZh
-            ? '显示传入的文件请求和待发送项。'
-            : 'Shows incoming file offers and pending sends.',
+        channelName: 'File offers',
+        channelDescription: 'Shows incoming file offers and pending sends.',
         channelShowBadge: false,
         importance: NotificationImportance.High,
         playSound: false,
@@ -107,21 +98,19 @@ Future<void> main() async {
   await AppMotionController.instance.load();
   await AppLocaleController.instance.load();
 
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-    await windowManager.ensureInitialized();
-    const minSize = Size(600, 700);
-    const windowOptions = WindowOptions(
-      minimumSize: minSize,
-      size: Size(1280, 720),
-    );
-    await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.setMinimumSize(minSize);
-      await windowManager.show();
-      await windowManager.focus();
-    });
+  if (WindowStateManager.isDesktop) {
+    _windowStateManager = WindowStateManager();
+    await _windowStateManager!.init();
   }
 
   runApp(const MainApp());
+
+  if (WindowStateManager.isDesktop) {
+    // 首帧渲染完成后显示窗口并淡入，避免空白窗口和位置跳变。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_windowStateManager!.showWithFadeIn());
+    });
+  }
 }
 
 class MainApp extends StatefulWidget {
