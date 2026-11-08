@@ -19,6 +19,9 @@ dependencies:
     path: packages/flashbyte_core
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
   flutter_animate: ^4.5.2
   awesome_notifications: ^0.12.1
   heroine: ^0.5.0+2
