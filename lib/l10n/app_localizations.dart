@@ -404,7 +404,7 @@ class AppLocalizations {
       ? '权限被拒绝。请检查文件或文件夹权限后重试。'
       : 'Permission was denied. Check file or folder permissions and try again.';
   String get somethingWentWrong => isZh ? '出了点问题。' : 'Something went wrong.';
-}
+
   /// 将 [UserFacingError.from] 产生的英文消息映射为当前语言。
   /// 未匹配的中文或未知英文原样返回。
   String localizeError(String englishMessage) {
