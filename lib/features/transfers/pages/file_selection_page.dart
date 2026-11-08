@@ -160,8 +160,11 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
     _exitNotificationSent = true;
     try {
-      await SocketService.instance.stopConnectionGracefully();
-      await DeviceDiscoveryService.instance.stopAdvertising();
+      // 连接关闭与广播停止互不依赖，并行清理可缩短退出后的后台耗时。
+      await Future.wait([
+        SocketService.instance.stopConnectionGracefully(),
+        DeviceDiscoveryService.instance.stopAdvertising(),
+      ]);
     } catch (_) {
       // Leaving the page should not be blocked by cleanup failures.
     }
@@ -173,15 +176,11 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     }
 
     _isHandlingFileSelectionPop = true;
-    await _notifyFileSelectionExit();
-    if (!mounted) {
-      return;
-    }
-
     setState(() {
       _allowFileSelectionPop = true;
     });
-    await WidgetsBinding.instance.endOfFrame;
+    // 清理放到后台执行，页面立即退出，避免返回动画被网络与广播关闭阻塞。
+    unawaited(_notifyFileSelectionExit());
     if (!mounted) {
       return;
     }
@@ -532,10 +531,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       receiveStarted = false;
     }
 
-    if (SocketService.instance.isHosting) {
-      receiveStarted = true;
-    }
-
+    // 不依据全局 isHosting 认定本页已就绪：快速返回再进入时上一页的服务器
+    // 可能仍在托管，误判会跳过本页启动，导致上一页停止后接收服务缺失。
     if (receiveStarted || isReceiveStarting) {
       return;
     }
