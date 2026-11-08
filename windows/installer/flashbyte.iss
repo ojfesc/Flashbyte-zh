@@ -31,6 +31,15 @@ VersionInfoCompany={#MyAppPublisher}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+
+[CustomMessages]
+english.AppDisplayName=Flashbyte
+chinesesimplified.AppDisplayName=闪传
+english.CreateDesktopIcon=Create a &desktop shortcut
+chinesesimplified.CreateDesktopIcon=创建桌面快捷方式(&D)
+english.AdditionalIcons=Additional shortcuts:
+chinesesimplified.AdditionalIcons=附加快捷方式：
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -39,9 +48,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Flashbyte"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall Flashbyte"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Flashbyte"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{cm:AppDisplayName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
