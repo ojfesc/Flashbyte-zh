@@ -23,8 +23,6 @@ class AppSettings {
   static const String deviceIdKey = 'deviceId';
   static const int defaultPort = 8050;
   static const String defaultPrimaryColorName = 'green';
-  static const String languageKey = 'language';
-  static const String defaultLanguageCode = 'system';
 
   static const Map<String, MaterialColor> primaryColorOptions = {
     'red': Colors.red,
@@ -187,6 +185,20 @@ class AppSettings {
   static Future<void> setPrimaryColorName(String colorName) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(primaryColorKey, colorName);
+  }
+
+  static Future<String> getLanguage() async {
+    final prefs = await SharedPreferences.getInstance();
+    final code = prefs.getString(languageKey);
+    if (code == 'zh' || code == 'en' || code == 'system') {
+      return code!;
+    }
+    return defaultLanguageCode;
+  }
+
+  static Future<void> setLanguage(String code) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(languageKey, code);
   }
 
   static Future<bool> getUseDarkMode() async {
