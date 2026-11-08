@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/controllers/app_appearance_controller.dart';
+import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/app/app_settings.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flutter/material.dart';
@@ -82,6 +84,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
 
+    final l10n = AppLocalizations.of(context);
+
     if (_useTLS && !value) {
       final dontShowAgain = prefs.getBool('dontShowTLSDialog') ?? false;
       if (!dontShowAgain) {
@@ -110,7 +114,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     value: dontShowChecked,
                     onChanged: (v) =>
                         setDialogState(() => dontShowChecked = v!),
-                    title: Text(AppLocalizations.of(ctx).dontShowAgain),
+                    title: Text(AppLocalizations.of(ctx).doNotShowAgain),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                   ),
@@ -136,6 +140,9 @@ class _SettingsPageState extends State<SettingsPage> {
       _useTLS = value;
     });
     await widget.onServerSettingsChanged?.call();
+    // 避免未使用变量警告
+    // ignore: unnecessary_statements
+    l10n;
   }
 
   void _handlePortFocusChange() {
@@ -277,11 +284,29 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {});
   }
 
+  Future<void> _setLanguage(String code) async {
+    await _localeController.setLanguage(code);
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  String _languageLabel(AppLocalizations l10n, String code) {
+    switch (code) {
+      case 'zh':
+        return l10n.languageChinese;
+      case 'en':
+        return l10n.languageEnglish;
+      default:
+        return l10n.languageSystem;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Settings"),
+        title: Text(l10n.settings),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -291,16 +316,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    AppLocalizations.of(context).appearance,
+                    l10n.appearance,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).darkMode),
+                  title: Text(l10n.darkMode),
                   subtitle: Text(
                     _appearanceController.isAmoled
-                        ? AppLocalizations.of(context).darkModeAmoledSubtitle
-                        : AppLocalizations.of(context).darkModeSubtitle,
+                        ? l10n.darkModeAmoledSubtitle
+                        : l10n.darkModeSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _appearanceController.useDarkMode,
@@ -314,30 +339,24 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).reduceAnimations),
-                  subtitle: Text(
-                    AppLocalizations.of(context).reduceAnimationsSubtitle,
-                  ),
+                  title: Text(l10n.reduceAnimations),
+                  subtitle: Text(l10n.reduceAnimationsSubtitle),
                   trailing: _SettingsToggle(
                     value: _motionController.disableAnimations,
                     onChanged: _toggleAnimations,
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).staticReceiveShape),
-                  subtitle: Text(
-                    AppLocalizations.of(context).staticReceiveShapeSubtitle,
-                  ),
+                  title: Text(l10n.staticReceiveShape),
+                  subtitle: Text(l10n.staticReceiveShapeSubtitle),
                   trailing: _SettingsToggle(
                     value: _motionController.disableReceiveShapeAnimation,
                     onChanged: _toggleReceiveShapeAnimation,
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).dynamicColors),
-                  subtitle: Text(
-                    AppLocalizations.of(context).dynamicColorsSubtitle,
-                  ),
+                  title: Text(l10n.dynamicColors),
+                  subtitle: Text(l10n.dynamicColorsSubtitle),
                   trailing: _SettingsToggle(
                     value: _appearanceController.useDynamicColors,
                     onChanged: _appearanceController.isAmoled
@@ -358,9 +377,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       final isAmoledEntry = entry.key == 'amoled';
                       return ChoiceChip(
                         label: Text(
-                          isAmoledEntry
-                              ? AppLocalizations.of(context).amoled
-                              : _capitalize(entry.key),
+                          isAmoledEntry ? l10n.amoled : _capitalize(entry.key),
                         ),
                         selected: isSelected,
                         onSelected: _appearanceController.useDynamicColors
@@ -390,38 +407,34 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    AppLocalizations.of(context).language,
+                    l10n.language,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).language),
+                  title: Text(l10n.language),
                   subtitle: Text(
-                    switch (_localeController.languageCode) {
-                      'zh' => AppLocalizations.of(context).languageChinese,
-                      'en' => AppLocalizations.of(context).languageEnglish,
-                      _ => AppLocalizations.of(context).languageSystem,
-                    },
+                    _languageLabel(l10n, _localeController.languageCode),
                   ),
                   trailing: DropdownButton<String>(
                     value: _localeController.languageCode,
                     onChanged: (value) {
                       if (value != null) {
-                        _localeController.setLanguage(value);
+                        _setLanguage(value);
                       }
                     },
                     items: [
                       DropdownMenuItem(
                         value: 'system',
-                        child: Text(AppLocalizations.of(context).languageSystem),
+                        child: Text(l10n.languageSystem),
                       ),
                       DropdownMenuItem(
                         value: 'zh',
-                        child: Text(AppLocalizations.of(context).languageChinese),
+                        child: Text(l10n.languageChinese),
                       ),
                       DropdownMenuItem(
                         value: 'en',
-                        child: Text(AppLocalizations.of(context).languageEnglish),
+                        child: Text(l10n.languageEnglish),
                       ),
                     ],
                   ),
@@ -429,16 +442,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    AppLocalizations.of(context).connection,
+                    l10n.connection,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).tlsEncryption),
+                  title: Text(l10n.tlsEncryption),
                   subtitle: Text(
                     widget.locked
-                        ? AppLocalizations.of(context).disconnectBeforeTls
-                        : AppLocalizations.of(context).tlsEncryptionSubtitle,
+                        ? l10n.disconnectBeforeTls
+                        : l10n.tlsEncryptionSubtitle,
                   ),
                   trailing: _SettingsToggle(
                     value: _useTLS,
@@ -446,11 +459,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).port),
+                  title: Text(l10n.port),
                   subtitle: Text(
                     widget.locked
-                        ? AppLocalizations.of(context).disconnectBeforePort
-                        : AppLocalizations.of(context).portSubtitle,
+                        ? l10n.disconnectBeforePort
+                        : l10n.portSubtitle,
                   ),
                   trailing: SizedBox(
                     width: 96,
@@ -474,11 +487,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 ListTile(
-                  title: Text(AppLocalizations.of(context).downloadFolder),
+                  title: Text(l10n.downloadFolder),
                   subtitle: Text(
                     widget.locked
-                        ? AppLocalizations.of(context).disconnectBeforeFolder
-                        : AppLocalizations.of(context).downloadFolderSubtitle,
+                        ? l10n.disconnectBeforeFolder
+                        : l10n.downloadFolderSubtitle,
                   ),
                   trailing: SizedBox(
                     width: 260,
@@ -494,7 +507,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: AppLocalizations.of(context).resetFolder,
+                              tooltip: l10n.resetFolder,
                               onPressed: widget.locked
                                   ? null
                                   : _resetDownloadDirectory,
@@ -511,14 +524,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Text(
-                    AppLocalizations.of(context).trustedDevices,
+                    l10n.trustedDevices,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                   child: Text(
-                    AppLocalizations.of(context).trustedDevicesDescription,
+                    l10n.trustedDevicesDescription,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -531,10 +544,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (trustedDevices.isEmpty) {
                       return ListTile(
                         leading: const Icon(Icons.shield_outlined),
-                        title: Text(AppLocalizations.of(context).noTrustedDevices),
-                        subtitle: Text(
-                          AppLocalizations.of(context).noTrustedDevicesSubtitle,
-                        ),
+                        title: Text(l10n.noTrustedDevices),
+                        subtitle: Text(l10n.noTrustedDevicesSubtitle),
                       );
                     }
                     return Column(
@@ -550,8 +561,7 @@ class _SettingsPageState extends State<SettingsPage> {
                               style: const TextStyle(fontSize: 12),
                             ),
                             trailing: IconButton(
-                              tooltip: AppLocalizations.of(context)
-                                  .removeTrustedDevice,
+                              tooltip: l10n.removeTrustedDevice,
                               onPressed: () => unawaited(
                                 TrustedDevicesService.instance.removeTrusted(
                                   device.fingerprint,
