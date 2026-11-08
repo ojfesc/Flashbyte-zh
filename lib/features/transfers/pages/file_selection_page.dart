@@ -7,6 +7,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/app_settings.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
@@ -84,7 +85,6 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   int _serverRestartGeneration = 0;
   bool _receiveServerIntentionallyStopped = false;
   _ServerNetworkMode? _serverNetworkMode;
-  String _networkLabel = "Checking network";
   IconData _networkIcon = Icons.network_check_rounded;
 
   @override
@@ -216,22 +216,16 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     setState(() {
       _serverNetworkMode = nextNetworkMode;
       if (isHotspot) {
-        _networkLabel = "Hotspot active";
         _networkIcon = Icons.wifi_tethering_rounded;
       } else if (results.contains(ConnectivityResult.wifi)) {
-        _networkLabel = "Connected to Wi-Fi";
         _networkIcon = Icons.wifi_rounded;
       } else if (results.contains(ConnectivityResult.mobile)) {
-        _networkLabel = "Using mobile data";
         _networkIcon = Icons.signal_cellular_alt_rounded;
       } else if (results.contains(ConnectivityResult.ethernet)) {
-        _networkLabel = "Connected by Ethernet";
         _networkIcon = Icons.lan_rounded;
       } else if (results.contains(ConnectivityResult.vpn)) {
-        _networkLabel = "Connected through VPN";
         _networkIcon = Icons.vpn_lock_rounded;
       } else {
-        _networkLabel = "No network connection";
         _networkIcon = Icons.signal_wifi_off_rounded;
       }
     });
@@ -241,6 +235,28 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       } else if (_shouldReconnectServerFor(nextNetworkMode)) {
         unawaited(_restartServer());
       }
+    }
+  }
+
+  String _networkLabelFor(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    switch (_serverNetworkMode) {
+      case _ServerNetworkMode.hotspot:
+        return l10n.hotspotActive;
+      case _ServerNetworkMode.wifi:
+        return l10n.connectedToWifi;
+      case _ServerNetworkMode.mobile:
+        return l10n.usingMobileData;
+      case _ServerNetworkMode.ethernet:
+        return l10n.connectedByEthernet;
+      case _ServerNetworkMode.vpn:
+        return l10n.connectedThroughVpn;
+      case _ServerNetworkMode.offline:
+        return l10n.noNetworkConnection;
+      case _ServerNetworkMode.other:
+        return l10n.networkChecking;
+      case null:
+        return l10n.networkChecking;
     }
   }
 
@@ -377,7 +393,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            added == 1 ? '1 shared file added' : '$added shared files added',
+            AppLocalizations.of(context).sharedFilesAdded(added),
           ),
         ),
       );
@@ -411,6 +427,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     });
 
     try {
+      final l10n = AppLocalizations.of(context);
       final pickedFolder = await FastFilePicker.pickFolder(
         writePermission: false,
       );
@@ -419,7 +436,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       final folderPath = pickedFolder.path;
       if (folderPath == null || folderPath.isEmpty) {
         if (mounted) {
-          showScaffoldSnackbar('Cannot read this folder on this device.');
+          showScaffoldSnackbar(l10n.cannotReadFolder);
         }
         return;
       }
@@ -427,7 +444,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       final dir = Directory(folderPath);
       if (!await dir.exists()) {
         if (mounted) {
-          showScaffoldSnackbar('Folder not found.');
+          showScaffoldSnackbar(l10n.folderNotFound);
         }
         return;
       }
@@ -447,7 +464,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       if (!mounted) return;
 
       if (files.isEmpty) {
-        showScaffoldSnackbar('No files found in the selected folder.');
+        showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
         return;
       }
 
@@ -486,7 +503,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     });
 
     if (droppedFiles.isEmpty) {
-      showScaffoldSnackbar("Drop files here. Folders are not supported yet.");
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).dropFilesOnly,
+      );
     }
   }
 
@@ -562,9 +581,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     } catch (e) {
       debugPrint('[RECEIVE] start FAILED: $e');
       if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
       await _showErrorDialog(
-        title: 'Receive Error',
-        message: 'Failed to start receiver:\n${e.toString()}',
+        title: l10n.receiveError,
+        message: l10n.failedToStartReceiver(e),
       );
     } finally {
       if (mounted) {
@@ -685,7 +705,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     DiscoveredDevice? receiverPreview,
   }) async {
     if (selectedFiles.isEmpty) {
-      showScaffoldSnackbar("Select at least one file first");
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).selectAtLeastOneFile,
+      );
       return;
     }
     if (isConnectingToSender) {
@@ -727,9 +749,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
         isConnectingToSender = false;
         _selectedReceiverPreview = null;
       });
+      final l10n = AppLocalizations.of(context);
       await _showErrorDialog(
-        title: 'Connection Error',
-        message: 'Could not connect to receiver:\n${e.toString()}',
+        title: l10n.connectionError,
+        message: l10n.couldNotConnectToReceiver(e),
       );
     }
   }
@@ -777,11 +800,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Future<void> _showTlsMismatchDialog({required bool localUsesTls}) {
+    final l10n = AppLocalizations.of(context);
     return _showErrorDialog(
-      title: 'TLS Settings Do Not Match',
+      title: l10n.tlsSettingsDoNotMatch,
       message: localUsesTls
-          ? 'This device has TLS enabled, but the selected device has TLS disabled.\n\nDisable TLS on this device, or enable TLS on the other device, then try again.'
-          : 'This device has TLS disabled, but the selected device has TLS enabled.\n\nEnable TLS on this device, or disable TLS on the other device, then try again.',
+          ? l10n.tlsMismatchLocalOn
+          : l10n.tlsMismatchLocalOff,
     );
   }
 
@@ -799,7 +823,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   void _showFileRequiredFeedback(AnimationController controller) {
     controller.forward(from: 0);
-    showScaffoldSnackbar("Select at least one file first");
+    showScaffoldSnackbar(
+      AppLocalizations.of(context).selectAtLeastOneFile,
+    );
   }
 
   void _manuallyRefreshDiscovery() {
@@ -813,6 +839,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     if (!mounted) return;
 
     final status = message['status'];
+    final l10n = AppLocalizations.of(context);
 
     switch (status) {
       case 'client_connected':
@@ -841,8 +868,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           unawaited(_restartServer());
         }
         _showErrorDialog(
-          title: 'Connection Error',
-          message: message['message'] ?? 'Unknown error',
+          title: l10n.connectionError,
+          message: message['message'] ?? l10n.unknownError,
         );
         break;
     }
@@ -1050,6 +1077,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final useWideLayout =
         MediaQuery.sizeOf(context).width >= _wideLayoutBreakpoint;
     final colorScheme = Theme.of(context).colorScheme;
@@ -1067,14 +1095,14 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ? colorScheme.surface
             : colorScheme.surfaceContainerLowest,
         appBar: AppBar(
-          title: const Text("Flashbyte"),
+          title: Text(l10n.flashbyte),
           centerTitle: !useWideLayout,
           backgroundColor: useWideLayout
               ? colorScheme.surface
               : colorScheme.surfaceContainerLowest,
           actions: [
             IconButton(
-              tooltip: 'Settings',
+              tooltip: l10n.settings,
               icon: const Icon(Icons.settings),
               onPressed: _settingsLocked ? null : _openSettings,
             ),
@@ -1115,22 +1143,22 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                         });
                       }
                     },
-                    tabs: const [
+                    tabs: [
                       Tab(
-                        iconMargin: EdgeInsets.symmetric(
+                        iconMargin: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 3,
                         ),
-                        icon: Icon(Icons.upload_rounded),
-                        text: "Send",
+                        icon: const Icon(Icons.upload_rounded),
+                        text: l10n.send,
                       ),
                       Tab(
-                        iconMargin: EdgeInsets.symmetric(
+                        iconMargin: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 3,
                         ),
-                        icon: Icon(Icons.download_rounded),
-                        text: "Receive",
+                        icon: const Icon(Icons.download_rounded),
+                        text: l10n.receive,
                       ),
                     ],
                   ),
@@ -1141,6 +1169,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildWideLayout() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return ColoredBox(
@@ -1164,8 +1193,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                         flex: 11,
                         child: _buildDesktopPanel(
                           icon: Icons.north_east_rounded,
-                          title: "Send",
-                          subtitle: "Choose files and connect to a receiver",
+                          title: l10n.sendPanelTitle,
+                          subtitle: l10n.sendPanelSubtitle,
                           fillHeight: true,
                           child: _buildSendTab(showHeader: false),
                         ),
@@ -1174,8 +1203,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                         flex: 9,
                         child: _buildDesktopPanel(
                           icon: Icons.south_west_rounded,
-                          title: "Receive",
-                          subtitle: "Keep this page open to stay discoverable",
+                          title: l10n.receivePanelTitle,
+                          subtitle: l10n.receivePanelSubtitle,
                           fillHeight: true,
                           child: _buildReceiveTab(
                             showHeader: false,
@@ -1195,6 +1224,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildDesktopHeader() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Row(
@@ -1205,14 +1235,14 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             spacing: 4,
             children: [
               Text(
-                "File transfer",
+                l10n.fileTransfer,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                   letterSpacing: -0.5,
                 ),
               ),
               Text(
-                "Send and receive on your local network from one workspace.",
+                l10n.sendReceiveOnLocalNetwork,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -1222,7 +1252,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
         ),
         _buildDesktopStatusChip(
           icon: _networkIcon,
-          label: _networkLabel,
+          label: _networkLabelFor(context),
         ),
         const SizedBox(width: 10),
         _buildDesktopStatusChip(
@@ -1230,10 +1260,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               ? Icons.dns_rounded
               : Icons.portable_wifi_off_rounded,
           label: SocketService.instance.isSecureHosting
-              ? "Secure server running"
+              ? l10n.secureServerRunning
               : SocketService.instance.isHosting
-              ? "Server running"
-              : "Server stopped",
+              ? l10n.serverRunning
+              : l10n.serverStopped,
           emphasized: SocketService.instance.isHosting,
         ),
       ],
@@ -1350,6 +1380,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildSendTab({bool showHeader = true}) {
+    final l10n = AppLocalizations.of(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(0, showHeader ? 12 : 0, 0, 24),
       child: Column(
@@ -1360,8 +1391,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           if (showHeader)
             _buildBrandHeader(
               icon: Icons.upload_file_rounded,
-              title: "Send files",
-              subtitle: "Pick files, then choose a nearby receiver.",
+              title: l10n.sendFilesTitle,
+              subtitle: l10n.pickFilesThenChoose,
             ),
           if (showHeader) _buildMobileStatusStrip(),
           _buildSelectedFilesCard(),
@@ -1373,6 +1404,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildReceiveTab({bool showHeader = true, bool fillHeight = false}) {
+    final l10n = AppLocalizations.of(context);
     if (fillHeight) {
       return CustomScrollView(
         primary: false,
@@ -1381,8 +1413,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             SliverToBoxAdapter(
               child: _buildBrandHeader(
                 icon: Icons.broadcast_on_personal_rounded,
-                title: "Receive files",
-                subtitle: "Stay visible to nearby devices while you wait.",
+                title: l10n.receiveFilesTitle,
+                subtitle: l10n.stayVisible,
               ),
             ),
             const SliverToBoxAdapter(child: SizedBox(height: 20)),
@@ -1420,8 +1452,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
         if (showHeader)
           _buildBrandHeader(
             icon: Icons.broadcast_on_personal_rounded,
-            title: "Receive files",
-            subtitle: "Stay visible to nearby devices while you wait.",
+            title: l10n.receiveFilesTitle,
+            subtitle: l10n.stayVisible,
           ),
         if (showHeader) _buildMobileStatusStrip(),
         _buildReceiverIdentityCard(),
@@ -1435,6 +1467,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildReceiverVisualCard({required bool fillHeight}) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
     final staticReceiveShape =
@@ -1512,10 +1545,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                       ),
                       Text(
                         _receiveServerIntentionallyStopped
-                            ? 'Receiver stopped'
+                            ? l10n.receiverStopped
                             : isReceiveStarting
-                            ? 'Starting receiver'
-                            : 'Visible to nearby devices',
+                            ? l10n.startingReceiver
+                            : l10n.visibleToNearbyDevices,
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
                           color: _receiveServerIntentionallyStopped
                               ? colorScheme.onSurfaceVariant
@@ -1528,7 +1561,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 if (showHelperText) ...[
                   SizedBox(height: helperGap),
                   Text(
-                    "Keep Flashbyte open so senders can find this device.",
+                    l10n.keepFlashbyteOpen,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
@@ -1545,6 +1578,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildMobileStatusStrip() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final serverRunning = SocketService.instance.isHosting;
 
@@ -1568,7 +1602,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              _networkLabel,
+              _networkLabelFor(context),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
@@ -1600,7 +1634,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                       : colorScheme.onSurfaceVariant,
                 ),
                 Text(
-                  serverRunning ? "Ready" : "Offline",
+                  serverRunning ? l10n.ready : l10n.offline,
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: serverRunning
                         ? colorScheme.onPrimaryContainer
@@ -1616,6 +1650,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildAvailableDevicesCard() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
 
@@ -1638,12 +1673,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                     spacing: 2,
                     children: [
                       Text(
-                        "Nearby receivers",
+                        l10n.nearbyReceivers,
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                       Text(
-                        "Tap a device to offer the selected files.",
+                        l10n.tapDeviceToOffer,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -1652,7 +1687,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Refresh nearby receivers',
+                  tooltip: l10n.refreshNearbyReceivers,
                   onPressed: _manuallyRefreshDiscovery,
                   icon: AnimatedBuilder(
                     animation: _discoveryRefreshController,
@@ -1713,6 +1748,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildEmptyDevicesState(ColorScheme colorScheme) {
+    final l10n = AppLocalizations.of(context);
     return Container(
       key: const ValueKey('no-devices'),
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
@@ -1736,7 +1772,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ),
           ),
           Text(
-            isDiscovering ? "Scanning this network" : "No receivers found",
+            isDiscovering ? l10n.scanningNetwork : l10n.noReceiversFound,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w700,
@@ -1744,8 +1780,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           ),
           Text(
             isDiscovering
-                ? "Receivers will appear here as soon as they are discoverable."
-                : "Make sure the other device is open on Receive and connected to this network.",
+                ? l10n.receiversAppearHere
+                : l10n.makeSureOtherDeviceOpen,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
@@ -1757,6 +1793,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildDeviceTile(DiscoveredDevice device, {Key? key}) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final canTap = !isPickingFile && !isConnectingToSender;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
@@ -1810,8 +1847,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                       ),
                       Text(
                         device.usesTls
-                            ? 'Local receiver - secure'
-                            : 'Local receiver',
+                            ? l10n.localReceiverSecure
+                            : l10n.localReceiver,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                           fontFeatures: const [
@@ -1872,6 +1909,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildReceiverIdentityCard() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Card(
@@ -1902,7 +1940,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 spacing: 2,
                 children: [
                   Text(
-                    "Visible as",
+                    l10n.visibleAs,
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer.withValues(
                         alpha: 0.72,
@@ -1921,7 +1959,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                     ),
                     decoration: InputDecoration(
                       isDense: true,
-                      hintText: "Creating your name...",
+                      hintText: l10n.creatingYourName,
                       hintStyle: Theme.of(context).textTheme.titleMedium
                           ?.copyWith(
                             color: colorScheme.onPrimaryContainer.withValues(
@@ -1939,7 +1977,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ),
             if (_isCustomDeviceName())
               IconButton(
-                tooltip: "Reset to device name",
+                tooltip: l10n.resetToDeviceName,
                 onPressed: _settingsLocked ? null : _resetDeviceName,
                 icon: const Icon(Icons.close_rounded),
                 color: colorScheme.onPrimaryContainer,
@@ -1948,7 +1986,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 ),
               ),
             IconButton(
-              tooltip: "Generate a new name",
+              tooltip: l10n.generateNewName,
               onPressed: _settingsLocked ? null : _generateDeviceName,
               icon: const Icon(Icons.refresh_rounded),
               color: colorScheme.onPrimaryContainer,
@@ -2023,6 +2061,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildSelectedFilesCard() {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
     final card = Card(
@@ -2059,6 +2098,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       return card;
     }
 
+    // l10n is used inside the drop state builder; touch it here to silence
+    // unused-variable lint without altering behavior.
+    // ignore: unnecessary_statements
+    l10n;
     return DropTarget(
       enable: !isConnectingToSender,
       onDragEntered: (_) {
@@ -2083,6 +2126,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildSelectedFilesCardContents(ColorScheme colorScheme) {
+    final l10n = AppLocalizations.of(context);
     return Column(
       key: const ValueKey('selected-files-card-contents'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2096,7 +2140,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 spacing: 2,
                 children: [
                   Text(
-                    _selectionSummary,
+                    _selectionSummary(context),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -2105,8 +2149,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                   ),
                   Text(
                     selectedFiles.isEmpty
-                        ? "Choose what you want to send."
-                        : "Ready to send after you pick a receiver.",
+                        ? l10n.chooseWhatToSend
+                        : l10n.readyToSend,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),
@@ -2116,7 +2160,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ),
             if (selectedFiles.isNotEmpty)
               IconButton(
-                tooltip: "Clear selected files",
+                tooltip: l10n.clearSelectedFiles,
                 onPressed: isConnectingToSender
                     ? null
                     : () {
@@ -2177,10 +2221,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                             ),
                             Text(
                               isPickingFile
-                                  ? "Picking..."
+                                  ? l10n.picking
                                   : selectedFiles.isEmpty
-                                  ? "Pick files"
-                                  : "Change files",
+                                  ? l10n.pickFiles
+                                  : l10n.changeFiles,
                               style: Theme.of(context).textTheme.labelLarge
                                   ?.copyWith(
                                     color: selectedFiles.isEmpty
@@ -2236,7 +2280,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                                     : colorScheme.onSurfaceVariant,
                               ),
                               Text(
-                                "Folder",
+                                l10n.folder,
                                 style: Theme.of(context).textTheme.labelSmall
                                     ?.copyWith(
                                       color: selectedFiles.isEmpty
@@ -2261,6 +2305,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Widget _buildDropFilesState(ColorScheme colorScheme) {
+    final l10n = AppLocalizations.of(context);
     return ConstrainedBox(
       key: const ValueKey('drop-files-state'),
       constraints: const BoxConstraints(minHeight: 172),
@@ -2283,7 +2328,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               ),
             ),
             Text(
-              "Drop files here",
+              l10n.dropFilesHere,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 color: colorScheme.onPrimaryContainer,
@@ -2291,7 +2336,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               ),
             ),
             Text(
-              "Release to replace the current selection.",
+              l10n.releaseToReplaceSelection,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
@@ -2394,15 +2439,13 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     return extension.length > 5 ? extension.substring(0, 5) : extension;
   }
 
-  String get _selectionSummary {
+  String _selectionSummary(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final count = selectedFiles.length;
     if (count == 0) {
-      return "No files selected";
+      return l10n.noFilesSelected;
     }
-    if (count == 1) {
-      return "1 file selected";
-    }
-    return "$count files selected";
+    return l10n.nFilesSelected(count);
   }
 
   bool get _supportsDesktopDrop =>
@@ -2425,8 +2468,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     required String message,
   }) async {
     if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
     final error = UserFacingError.from(message);
+    final displayMessage = l10n.localizeError(error.message);
 
     await showGeneralDialog(
       context: context,
@@ -2448,7 +2493,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           mainAxisSize: MainAxisSize.min,
           spacing: 10,
           children: [
-            Text(error.message),
+            Text(displayMessage),
             if (error.hasDetails)
               Card(
                 margin: EdgeInsets.zero,
@@ -2476,9 +2521,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
                   onTap: () => Navigator.pop(context),
-                  child: const Padding(
-                    padding: EdgeInsets.all(13),
-                    child: Center(child: Text("Dismiss")),
+                  child: Padding(
+                    padding: const EdgeInsets.all(13),
+                    child: Center(child: Text(l10n.dismiss)),
                   ),
                 ),
               ),
