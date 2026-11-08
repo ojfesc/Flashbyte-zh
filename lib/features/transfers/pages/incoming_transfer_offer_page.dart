@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
@@ -74,6 +75,7 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
   void _accept() {
     if (_isClosing) return;
     _isClosing = true;
+    final l10n = AppLocalizations.of(context);
     final fingerprint = widget.sender?['certFingerprint'] as String?;
     if (_trustSender && fingerprint != null && fingerprint.isNotEmpty) {
       final senderName = widget.sender?['name'] as String?;
@@ -82,7 +84,7 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
           fingerprint: fingerprint,
           name: (senderName != null && senderName.isNotEmpty)
               ? senderName
-              : 'Unknown device',
+              : l10n.unknownDevice,
         ),
       );
     }
@@ -103,8 +105,9 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final senderName = widget.sender?['name'] as String? ?? 'Unknown device';
+    final senderName = widget.sender?['name'] as String? ?? l10n.unknownDevice;
     final senderAddress = widget.sender?['address'] as String?;
     final senderPort = widget.sender?['port'] as int?;
     final senderUsesTls = widget.sender?['tls'] == true;
@@ -124,11 +127,11 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
           backgroundColor: colorScheme.surfaceContainerLowest,
           centerTitle: true,
           leading: IconButton(
-            tooltip: 'Decline files',
+            tooltip: l10n.declineFiles,
             onPressed: _decline,
             icon: const Icon(Icons.arrow_back_rounded),
           ),
-          title: const Text('Incoming files'),
+          title: Text(l10n.incomingFiles),
         ),
         body: SafeArea(
           child: Center(
@@ -166,8 +169,10 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
     bool senderUsesTls,
     String? senderFingerprint,
   ) {
+    final l10n = AppLocalizations.of(context);
+
     final senderCard = _OfferSurface(
-      title: 'Devices',
+      title: l10n.devices,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
         child: Column(
@@ -176,11 +181,11 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
             _maybeAnimate(
               context,
               _ApprovalDeviceRow(
-                label: 'Sender',
+                label: l10n.sender,
                 name: senderName,
-                detail: _deviceTypeLabel(senderType),
+                detail: _deviceTypeLabel(l10n, senderType),
                 type: senderType,
-                address: senderAddress ?? 'Address pending',
+                address: senderAddress ?? l10n.addressPending,
                 port: senderPort,
                 usesTls: senderUsesTls,
                 fingerprint: senderFingerprint,
@@ -198,11 +203,11 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
             _maybeAnimate(
               context,
               _ApprovalDeviceRow(
-                label: 'This device',
+                label: l10n.thisDevice,
                 name: widget.receiverName,
-                detail: _deviceTypeLabel(widget.receiverType),
+                detail: _deviceTypeLabel(l10n, widget.receiverType),
                 type: widget.receiverType,
-                address: 'Local receiver',
+                address: l10n.localReceiverLabel,
                 port: null,
                 usesTls: widget.receiverUsesTls,
                 color: colorScheme.primaryContainer,
@@ -219,7 +224,7 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
     );
     final fileCount = widget.files.length;
     final fileCard = _OfferSurface(
-      title: fileCount == 1 ? 'Requested file' : 'Requested files',
+      title: fileCount == 1 ? l10n.requestedFile : l10n.requestedFiles,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
         child: Column(
@@ -257,11 +262,11 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
                         _ApprovalHeader(
                           icon: Icons.file_download_rounded,
                           title: fileCount == 1
-                              ? 'Approve incoming file'
-                              : 'Approve incoming files',
+                              ? l10n.approveIncomingFile
+                              : l10n.approveIncomingFiles,
                           message: fileCount == 1
-                              ? 'Review the sender and file before saving it here.'
-                              : 'Review the sender and $fileCount files before saving them here.',
+                              ? l10n.reviewSenderAndFile
+                              : l10n.reviewSenderAndNFiles(fileCount),
                         ),
                         (child) => child
                             .animate()
@@ -303,12 +308,12 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
                       : (value) =>
                             setState(() => _trustSender = value ?? false),
                   title: Text(
-                    'Always accept files from $senderName',
+                    l10n.alwaysAcceptFilesFrom(senderName),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
-                  subtitle: const Text(
-                    'Skip this approval screen for this device.',
-                    style: TextStyle(fontSize: 12),
+                  subtitle: Text(
+                    l10n.skipApproval,
+                    style: const TextStyle(fontSize: 12),
                   ),
                   dense: true,
                   controlAffinity: ListTileControlAffinity.leading,
@@ -326,6 +331,7 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
   }
 
   Widget _buildOutcome(BuildContext context, ColorScheme colorScheme) {
+    final l10n = AppLocalizations.of(context);
     final senderCancelled = _outcome == _IncomingOfferOutcome.senderCancelled;
     final declined = _outcome == _IncomingOfferOutcome.declined;
     final icon = senderCancelled
@@ -334,15 +340,15 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
         ? Icons.block_rounded
         : Icons.portable_wifi_off_rounded;
     final title = senderCancelled
-        ? 'Sender cancelled the transfer'
+        ? l10n.senderCancelledTransfer
         : declined
-        ? 'Files declined'
-        : 'Connection ended';
+        ? l10n.filesDeclined
+        : l10n.connectionEnded;
     final message = senderCancelled
-        ? 'The sender no longer wants to send these files. Nothing was downloaded.'
+        ? l10n.senderCancelledMessage
         : declined
-        ? 'These files were not accepted and nothing was downloaded.'
-        : 'The connection ended before a decision was made.';
+        ? l10n.filesDeclinedMessage
+        : l10n.connectionEndedMessage;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -376,7 +382,7 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
         const SizedBox(height: 28),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Back to file selection'),
+          child: Text(l10n.backToFileSelection),
         ),
       ],
     );
@@ -398,8 +404,10 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
     return '${value.toStringAsFixed(precision)} ${units[unit]}';
   }
 
-  String _deviceTypeLabel(DiscoveredDeviceType type) {
-    return type == DiscoveredDeviceType.laptop ? 'Desktop or laptop' : 'Phone';
+  String _deviceTypeLabel(AppLocalizations l10n, DiscoveredDeviceType type) {
+    return type == DiscoveredDeviceType.laptop
+        ? l10n.desktopOrLaptop
+        : l10n.phone;
   }
 }
 
@@ -446,13 +454,14 @@ class _OfferActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FilledButton.icon(
           onPressed: onAccept,
           icon: const Icon(Icons.download_rounded),
-          label: const Text('Accept and receive'),
+          label: Text(l10n.acceptAndReceive),
           style: FilledButton.styleFrom(
             minimumSize: const Size.fromHeight(52),
           ),
@@ -461,7 +470,7 @@ class _OfferActions extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onDecline,
           icon: const Icon(Icons.close_rounded),
-          label: const Text('Decline'),
+          label: Text(l10n.decline),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(52),
           ),
@@ -564,6 +573,7 @@ class _TransferDirectionDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Row(
@@ -594,7 +604,7 @@ class _TransferDirectionDivider extends StatelessWidget {
                     : colorScheme.onSurfaceVariant,
               ),
               Text(
-                secure ? 'Secure request' : 'Unencrypted request',
+                secure ? l10n.secureRequest : l10n.unencryptedRequest,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: secure
                       ? colorScheme.onPrimaryContainer
@@ -642,6 +652,7 @@ class _ApprovalDeviceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Material(
@@ -706,11 +717,11 @@ class _ApprovalDeviceRow extends StatelessWidget {
                 if (port != null)
                   _DetailPill(
                     icon: Icons.numbers_rounded,
-                    label: 'Port $port',
+                    label: l10n.portLabel(port!),
                   ),
                 _DetailPill(
                   icon: usesTls ? Icons.lock_rounded : Icons.lock_open_rounded,
-                  label: usesTls ? 'TLS enabled' : 'Unencrypted',
+                  label: usesTls ? l10n.tlsEnabled : l10n.unencrypted,
                 ),
                 if (usesTls && fingerprint != null)
                   _DetailPill(
