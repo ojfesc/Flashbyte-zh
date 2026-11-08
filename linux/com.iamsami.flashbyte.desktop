@@ -1,6 +1,8 @@
 [Desktop Entry]
 Name=Flashbyte
+Name[zh_CN]=闪传
 Comment=File sharing over local network
+Comment[zh_CN]=本地网络文件共享
 Exec=flashbyte
 Icon=flashbyte
 Terminal=false
