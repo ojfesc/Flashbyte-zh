@@ -1,7 +1,13 @@
+import 'dart:io';
+
 import 'package:saf/saf.dart';
 
 class AndroidSafService {
   AndroidSafService._();
+
+  /// 判断当前系统语言是否为中文。
+  static bool get _isZh =>
+      Platform.localeName.toLowerCase().startsWith('zh');
 
   static bool isTreeUri(String value) => value.startsWith('content://');
 
@@ -13,7 +19,7 @@ class AndroidSafService {
 
     final decoded = Uri.decodeComponent(treeMatch.group(1)!);
     if (decoded == 'primary:') {
-      return 'Internal storage';
+      return _isZh ? '内部存储' : 'Internal storage';
     }
     if (decoded.startsWith('primary:')) {
       return decoded.replaceFirst('primary:', '');
