@@ -4,6 +4,7 @@ set -e
 # ---- Must match install.sh ----
 APP_NAME="flashbyte"
 APP_DISPLAY_NAME="Flashbyte"
+APP_DISPLAY_NAME_ZH="闪传"
 DESKTOP_ENTRY="com.iamsami.flashbyte"
 # --------------------------------
 
@@ -11,6 +12,21 @@ APP_DIR="$HOME/.local/share/$APP_NAME"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_BASE_DIR="$HOME/.local/share/icons/hicolor"
+
+# 根据当前语言环境选择输出语言，仅当 LANG/LC_ALL/LC_MESSAGES 含 zh 时使用中文。
+case "${LANG:-}${LC_ALL:-}${LC_MESSAGES:-}" in
+  zh*|*zh_*|*zh.*) LANG_ZH=1 ;;
+  *) LANG_ZH=0 ;;
+esac
+
+# 输出当前语言的文本：第一个参数为英文，第二个参数为中文。
+say() {
+  if [ "$LANG_ZH" = 1 ]; then
+    printf '%s\n' "$2"
+  else
+    printf '%s\n' "$1"
+  fi
+}
 
 # ---- Banner ----
 print_banner() {
@@ -71,7 +87,7 @@ print_banner() {
 
 print_banner
 echo ""
-echo "Uninstalling $APP_DISPLAY_NAME..."
+say "Uninstalling $APP_DISPLAY_NAME..." "正在卸载 $APP_DISPLAY_NAME_ZH..."
 echo ""
 
 REMOVED_ANYTHING=false
@@ -79,26 +95,26 @@ REMOVED_ANYTHING=false
 # 1. Remove the app bundle
 if [ -d "$APP_DIR" ]; then
     rm -rf "$APP_DIR"
-    echo "Removed: $APP_DIR"
+    say "Removed: $APP_DIR" "已移除：$APP_DIR"
     REMOVED_ANYTHING=true
 fi
 
 # 2. Remove the launcher script
 if [ -f "$BIN_DIR/$APP_NAME" ]; then
     rm -f "$BIN_DIR/$APP_NAME"
-    echo "Removed: $BIN_DIR/$APP_NAME"
+    say "Removed: $BIN_DIR/$APP_NAME" "已移除：$BIN_DIR/$APP_NAME"
     REMOVED_ANYTHING=true
 fi
 
 # 3. Remove the desktop files (current + legacy entry name)
 if [ -f "$DESKTOP_DIR/$DESKTOP_ENTRY.desktop" ]; then
     rm -f "$DESKTOP_DIR/$DESKTOP_ENTRY.desktop"
-    echo "Removed: $DESKTOP_DIR/$DESKTOP_ENTRY.desktop"
+    say "Removed: $DESKTOP_DIR/$DESKTOP_ENTRY.desktop" "已移除：$DESKTOP_DIR/$DESKTOP_ENTRY.desktop"
     REMOVED_ANYTHING=true
 fi
 if [ -f "$DESKTOP_DIR/$APP_NAME.desktop" ]; then
     rm -f "$DESKTOP_DIR/$APP_NAME.desktop"
-    echo "Removed: $DESKTOP_DIR/$APP_NAME.desktop"
+    say "Removed: $DESKTOP_DIR/$APP_NAME.desktop" "已移除：$DESKTOP_DIR/$APP_NAME.desktop"
     REMOVED_ANYTHING=true
 fi
 
@@ -106,7 +122,7 @@ fi
 for icon_file in "$ICON_BASE_DIR"/*/apps/"$APP_NAME.png"; do
     [ -f "$icon_file" ] || continue
     rm -f "$icon_file"
-    echo "Removed: $icon_file"
+    say "Removed: $icon_file" "已移除：$icon_file"
     REMOVED_ANYTHING=true
 done
 
@@ -116,7 +132,8 @@ gtk-update-icon-cache "$ICON_BASE_DIR" 2>/dev/null || true
 
 echo ""
 if [ "$REMOVED_ANYTHING" = true ]; then
-    echo "$APP_DISPLAY_NAME has been uninstalled."
+    say "$APP_DISPLAY_NAME has been uninstalled." "$APP_DISPLAY_NAME_ZH 已卸载。"
 else
-    echo "$APP_DISPLAY_NAME doesn't appear to be installed. Nothing to do."
+    say "$APP_DISPLAY_NAME doesn't appear to be installed. Nothing to do." \
+        "$APP_DISPLAY_NAME_ZH 似乎未安装，无需操作。"
 fi
