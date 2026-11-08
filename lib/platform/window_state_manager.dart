@@ -123,11 +123,15 @@ class WindowStateManager with WindowListener {
 
       final windowRect = Rect.fromLTWH(x, y, width, height);
       for (final display in displays) {
+        // visiblePosition 和 visibleSize 在某些平台可能为空，
+        // 回退到显示器的完整 position 和 size。
+        final position = display.visiblePosition ?? display.position;
+        final size = display.visibleSize ?? display.size;
         final displayRect = Rect.fromLTWH(
-          display.visiblePosition.dx,
-          display.visiblePosition.dy,
-          display.visibleSize.width,
-          display.visibleSize.height,
+          position.dx,
+          position.dy,
+          size.width,
+          size.height,
         );
         if (displayRect.overlaps(windowRect)) return true;
       }
