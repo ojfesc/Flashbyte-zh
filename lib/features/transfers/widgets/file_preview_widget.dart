@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
@@ -145,6 +146,7 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
 
     return Card(
@@ -300,11 +302,14 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
                           key: const ValueKey('open-file-button'),
                           isOpeningFile: _isOpeningFile,
                           onPressed: _openFileWithLoading,
+                          label: l10n.openFile,
                         )
                       : _TransferProgressFooter(
                           key: const ValueKey('transfer-progress-footer'),
                           progress: _transferProgress,
                           isCancelled: _transferCancelled,
+                          inProgressText: l10n.transferInProgressStatus,
+                          cancelledText: l10n.transferCancelledStatus,
                         ),
                 ),
               ),
@@ -338,12 +343,13 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
       final downloadsPath = await AppSettings.getDownloadDirectory();
       final result = await OpenFile.open("$downloadsPath/");
       if (result.type == ResultType.fileNotFound) {
-        showScaffoldSnackbar("Couldn't open that folder");
+        showScaffoldSnackbar(AppLocalizations.of(context).couldNotOpenFolder);
       }
     }
   }
 
   Future<void> openFile(String filePath) async {
+    final l10n = AppLocalizations.of(context);
     String pathToOpen = filePath;
 
     final result = await OpenFile.open(
@@ -354,13 +360,13 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
     switch (result.type) {
       case ResultType.error:
       case ResultType.fileNotFound:
-        showScaffoldSnackbar("File may have been moved or deleted.");
+        showScaffoldSnackbar(l10n.fileMayHaveBeenMovedOrDeleted);
         break;
       case ResultType.permissionDenied:
-        showScaffoldSnackbar("Permission denied.");
+        showScaffoldSnackbar(l10n.permissionDenied);
         break;
       case ResultType.noAppToOpen:
-        showScaffoldSnackbar("No app available to open this file");
+        showScaffoldSnackbar(l10n.noAppToOpenThisFile);
         break;
       default:
     }
@@ -399,10 +405,14 @@ class _TransferProgressFooter extends StatelessWidget {
     super.key,
     required this.progress,
     required this.isCancelled,
+    required this.inProgressText,
+    required this.cancelledText,
   });
 
   final double progress;
   final bool isCancelled;
+  final String inProgressText;
+  final String cancelledText;
 
   @override
   Widget build(BuildContext context) {
@@ -433,7 +443,7 @@ class _TransferProgressFooter extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  isCancelled ? 'Transfer cancelled' : 'Transfer in progress',
+                  isCancelled ? cancelledText : inProgressText,
                 ),
               ),
               Text(
@@ -463,10 +473,12 @@ class _OpenFileButton extends StatelessWidget {
     super.key,
     required this.isOpeningFile,
     required this.onPressed,
+    required this.label,
   });
 
   final bool isOpeningFile;
   final VoidCallback onPressed;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -493,9 +505,9 @@ class _OpenFileButton extends StatelessWidget {
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2.4),
                   )
-                : const Text(
-                    "Open file",
-                    key: ValueKey('open-file-label'),
+                : Text(
+                    label,
+                    key: const ValueKey('open-file-label'),
                   ),
           ),
         ),
