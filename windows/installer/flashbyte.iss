@@ -31,15 +31,11 @@ VersionInfoCompany={#MyAppPublisher}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [CustomMessages]
 english.AppDisplayName=Flashbyte
-chinesesimplified.AppDisplayName=闪传
 english.CreateDesktopIcon=Create a &desktop shortcut
-chinesesimplified.CreateDesktopIcon=创建桌面快捷方式(&D)
 english.AdditionalIcons=Additional shortcuts:
-chinesesimplified.AdditionalIcons=附加快捷方式：
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
