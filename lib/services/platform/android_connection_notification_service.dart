@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
+import 'package:flashbyte/app/app_settings.dart';
+import 'package:flashbyte/app/controllers/app_locale_controller.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flutter/foundation.dart';
 
@@ -40,11 +42,17 @@ class AndroidConnectionNotificationService {
   DateTime? _lastProgressNotificationUpdate;
   bool _initialized = false;
 
+  /// 缓存的应用语言代码，用于通知文本本地化。
+  String _languageCode = 'system';
+
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
 
     if (!Platform.isAndroid) return;
+
+    _languageCode = await AppSettings.getLanguage();
+    AppLocaleController.instance.addListener(_syncLanguage);
 
     _connectionSubscription = SocketService.instance.connectionStatusStream
         .listen(_handleConnectionChanged);
@@ -55,6 +63,22 @@ class AndroidConnectionNotificationService {
     if (SocketService.instance.hasEstablishedConnection) {
       unawaited(_handleConnectionChanged(true));
     }
+  }
+
+  /// 将应用语言设置同步到通知文本缓存。
+  void _syncLanguage() {
+    final code = AppLocaleController.instance.languageCode;
+    if (code != _languageCode) {
+      _languageCode = code;
+    }
+  }
+
+  /// 根据应用语言或系统语言返回中英文文本。
+  String _t(String en, String zh) {
+    final code = _languageCode;
+    if (code == 'zh') return zh;
+    if (code == 'en') return en;
+    return Platform.localeName.toLowerCase().startsWith('zh') ? zh : en;
   }
 
   Future<void> handleNotificationAction(ReceivedAction receivedAction) async {
@@ -158,9 +182,9 @@ class AndroidConnectionNotificationService {
 
   String get _peerName {
     final info = SocketService.instance.connectedPeerInfo;
-    if (info == null) return 'Unknown';
+    if (info == null) return _t('Unknown', '未知设备');
     final name = info['name'];
-    return name is String ? name : 'Unknown';
+    return name is String ? name : _t('Unknown', '未知设备');
   }
 
   Future<void> _handleConnectionChanged(bool isConnected) async {
@@ -188,13 +212,13 @@ class AndroidConnectionNotificationService {
         : [
             NotificationActionButton(
               key: _actionSendFile,
-              label: 'Send file',
+              label: _t('Send file', '发送文件'),
               actionType: ActionType.Default,
               autoDismissible: false,
             ),
             NotificationActionButton(
               key: _actionDisconnect,
-              label: 'Disconnect',
+              label: _t('Disconnect', '断开连接'),
               actionType: ActionType.SilentAction,
               autoDismissible: false,
             ),
@@ -206,7 +230,7 @@ class AndroidConnectionNotificationService {
           id: _foregroundServiceId,
           channelKey: _connectionChannelKey,
           title: 'Flashbyte',
-          body: 'Connected to $_peerName',
+          body: _t('Connected to $_peerName', '已连接到 $_peerName'),
           category: NotificationCategory.Service,
           autoDismissible: false,
           showWhen: false,
@@ -314,7 +338,7 @@ class AndroidConnectionNotificationService {
     _activeTransfers[fileId] = _TransferProgress(
       fileId: fileId,
       isReceived: isReceived,
-      direction: isReceived ? 'Receiving' : 'Sending',
+      direction: isReceived ? 'receiving' : 'sending',
       fileName: message['fileName'] as String? ?? 'file',
       progress: 0,
     );
@@ -393,7 +417,7 @@ class AndroidConnectionNotificationService {
         content: NotificationContent(
           id: _offerNotificationId,
           channelKey: _offerChannelKey,
-          title: 'Waiting for receiver to accept',
+          title: _t('Waiting for receiver to accept', '等待接收方接受'),
           body: fileName,
           locked: true,
           autoDismissible: false,
@@ -404,7 +428,7 @@ class AndroidConnectionNotificationService {
         actionButtons: [
           NotificationActionButton(
             key: _actionCancelOffer,
-            label: 'Cancel',
+            label: _t('Cancel', '取消'),
             actionType: ActionType.SilentAction,
             autoDismissible: false,
           ),
@@ -425,7 +449,7 @@ class AndroidConnectionNotificationService {
         content: NotificationContent(
           id: _offerNotificationId,
           channelKey: _offerChannelKey,
-          title: 'Incoming file',
+          title: _t('Incoming file', '接收文件'),
           body: fileName,
           locked: true,
           autoDismissible: false,
@@ -436,13 +460,13 @@ class AndroidConnectionNotificationService {
         actionButtons: [
           NotificationActionButton(
             key: _actionAcceptFile,
-            label: 'Accept',
+            label: _t('Accept', '接受'),
             actionType: ActionType.SilentAction,
             autoDismissible: false,
           ),
           NotificationActionButton(
             key: _actionDeclineFile,
-            label: 'Decline',
+            label: _t('Decline', '拒绝'),
             actionType: ActionType.SilentAction,
             autoDismissible: false,
           ),
@@ -524,24 +548,27 @@ class AndroidConnectionNotificationService {
     _lastProgressNotificationUpdate = DateTime.now();
 
     final isPaused = _pausedTransfers.contains(transfer.fileId);
+    final directionLabel = transfer.direction == 'receiving'
+        ? _t('Receiving', '接收中')
+        : _t('Sending', '发送中');
     final actions = [
       if (isPaused)
         NotificationActionButton(
           key: _actionResume,
-          label: 'Resume',
+          label: _t('Resume', '继续'),
           actionType: ActionType.SilentAction,
           autoDismissible: false,
         )
       else
         NotificationActionButton(
           key: _actionPause,
-          label: 'Pause',
+          label: _t('Pause', '暂停'),
           actionType: ActionType.SilentAction,
           autoDismissible: false,
         ),
       NotificationActionButton(
         key: _actionCancel,
-        label: 'Cancel',
+        label: _t('Cancel', '取消'),
         actionType: ActionType.SilentAction,
         autoDismissible: false,
       ),
@@ -552,8 +579,8 @@ class AndroidConnectionNotificationService {
         content: NotificationContent(
           id: _progressNotificationId,
           channelKey: _progressChannelKey,
-          title: '${transfer.direction} ${transfer.fileName}',
-          body: '$percent% complete',
+          title: '$directionLabel ${transfer.fileName}',
+          body: _t('$percent% complete', '$percent% 完成'),
           notificationLayout: NotificationLayout.ProgressBar,
           locked: true,
           progress: percent.toDouble(),
@@ -579,6 +606,7 @@ class AndroidConnectionNotificationService {
 
   Future<void> dispose() async {
     _progressNotificationTimer?.cancel();
+    AppLocaleController.instance.removeListener(_syncLanguage);
     await _connectionSubscription?.cancel();
     await _messageSubscription?.cancel();
     await AwesomeNotifications().cancel(_foregroundServiceId);
@@ -596,6 +624,8 @@ class _TransferProgress {
 
   final String fileId;
   final bool isReceived;
+
+  /// 语言无关的方向标识：`receiving` 或 `sending`。
   final String direction;
   final String fileName;
   double progress;
