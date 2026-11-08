@@ -4,7 +4,7 @@ set -e
 # ---- Must match install.sh ----
 APP_NAME="flashbyte"
 APP_DISPLAY_NAME="Flashbyte"
-APP_DISPLAY_NAME_ZH="闪传"
+APP_DISPLAY_NAME_ZH="Flashbyte"
 DESKTOP_ENTRY="com.iamsami.flashbyte"
 # --------------------------------
 
