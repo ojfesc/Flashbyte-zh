@@ -77,7 +77,9 @@ class AppSettings {
     }
     final hostname = Platform.localHostname.trim();
     if (hostname.isNotEmpty && hostname != 'localhost') return hostname;
-    return 'Unknown Device';
+    return Platform.localeName.toLowerCase().startsWith('zh')
+        ? '未知设备'
+        : 'Unknown Device';
   }
 
   /// Internal model codes like "2201117TG" or "SM-G991B" — all-caps
