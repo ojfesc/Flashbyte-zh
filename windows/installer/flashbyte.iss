@@ -37,7 +37,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 english.AppDisplayName=Flashbyte
 english.CreateDesktopIcon=Create a &desktop shortcut
 english.AdditionalIcons=Additional shortcuts:
-chinesesimplified.AppDisplayName=闪传
+chinesesimplified.AppDisplayName=Flashbyte
 chinesesimplified.CreateDesktopIcon=创建桌面快捷方式(&D)
 chinesesimplified.AdditionalIcons=附加快捷方式：
 
