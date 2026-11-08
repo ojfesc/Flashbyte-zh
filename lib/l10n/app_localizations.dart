@@ -18,7 +18,7 @@ class AppLocalizations {
   bool get isZh => locale.languageCode == 'zh';
 
   // 通用
-  String get appTitle => isZh ? '闪传' : 'Flashbyte';
+  String get appTitle => 'Flashbyte';
   String get settings => isZh ? '设置' : 'Settings';
   String get language => isZh ? '语言' : 'Language';
   String get languageSystem => isZh ? '跟随系统' : 'Follow system';
