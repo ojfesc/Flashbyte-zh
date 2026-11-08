@@ -46,11 +46,42 @@ class DeviceDiscoveryService {
   Map<String, dynamic>? _advertisement;
   String? _advertisingInstanceId;
 
+  Future<void> _lifecycleOperation = Future.value();
+
   Stream<List<DiscoveredDevice>> get devicesStream => _devicesController.stream;
   List<DiscoveredDevice> get devices =>
       List.unmodifiable(_devices.values.map((entry) => entry.device));
 
+  Future<T> _runLifecycleOperation<T>(Future<T> Function() operation) async {
+    final previousOperation = _lifecycleOperation;
+    final operationCompleter = Completer<void>();
+    _lifecycleOperation = operationCompleter.future;
+
+    try {
+      try {
+        await previousOperation;
+      } catch (_) {
+        // A failed previous operation should not poison the queue.
+      }
+
+      return await operation();
+    } finally {
+      if (!operationCompleter.isCompleted) {
+        operationCompleter.complete();
+      }
+    }
+  }
+
   Future<void> startDiscovery({
+    required String localDeviceId,
+    required int port,
+  }) {
+    return _runLifecycleOperation(
+      () => _startDiscoveryInternal(localDeviceId: localDeviceId, port: port),
+    );
+  }
+
+  Future<void> _startDiscoveryInternal({
     required String localDeviceId,
     required int port,
   }) async {
@@ -61,7 +92,7 @@ class DeviceDiscoveryService {
       return;
     }
 
-    await stopDiscovery();
+    await _stopDiscoveryInternal();
     await _bindReceiveSocket(port);
     final sockets = await _createSendSockets(port);
     _sendSockets.addAll(sockets);
@@ -85,14 +116,40 @@ class DeviceDiscoveryService {
     required bool usesTls,
     String? certificateFingerprint,
     String? certificatePem,
+  }) {
+    return _runLifecycleOperation(
+      () => _startAdvertisingInternal(
+        deviceId: deviceId,
+        name: name,
+        port: port,
+        usesTls: usesTls,
+        certificateFingerprint: certificateFingerprint,
+        certificatePem: certificatePem,
+      ),
+    );
+  }
+
+  Future<void> _startAdvertisingInternal({
+    required String deviceId,
+    required String name,
+    required int port,
+    required bool usesTls,
+    String? certificateFingerprint,
+    String? certificatePem,
   }) async {
     if (_advertisement != null &&
         _discoveryPort != null &&
         _discoveryPort != port) {
-      await stopAdvertising();
+      await _stopAdvertisingInternal();
     }
 
-    await startDiscovery(localDeviceId: deviceId, port: port);
+    if (_receiveSocket == null || _discoveryPort != port) {
+      await _startDiscoveryInternal(localDeviceId: deviceId, port: port);
+    } else {
+      _emitDevices();
+      requestRefresh();
+    }
+
     _advertisingInstanceId = DateTime.now().microsecondsSinceEpoch.toString();
     // NOTE: The full certificate PEM is deliberately NOT embedded in the
     // periodic hello. A 2048-bit RSA cert pushes the datagram past the ~1500
@@ -131,11 +188,17 @@ class DeviceDiscoveryService {
     );
   }
 
-  Future<void> stopAdvertising() async {
+  Future<void> stopAdvertising() {
+    return _runLifecycleOperation(_stopAdvertisingInternal);
+  }
+
+  Future<void> _stopAdvertisingInternal() async {
     _broadcastTimer?.cancel();
     _broadcastTimer = null;
     _cancelAdvertiseBurst();
     final advertisement = _advertisement;
+    _advertisement = null;
+    _advertisingInstanceId = null;
     if (advertisement != null) {
       final goodbye = {...advertisement, 'action': 'goodbye'};
       _sendPacket(goodbye);
@@ -144,11 +207,13 @@ class DeviceDiscoveryService {
         _sendPacket(goodbye);
       }
     }
-    _advertisement = null;
-    _advertisingInstanceId = null;
   }
 
-  Future<void> stopDiscovery() async {
+  Future<void> stopDiscovery() {
+    return _runLifecycleOperation(_stopDiscoveryInternal);
+  }
+
+  Future<void> _stopDiscoveryInternal() async {
     _cancelAdvertiseBurst();
     _cancelProbeBurst();
     _cleanupTimer?.cancel();
@@ -168,9 +233,11 @@ class DeviceDiscoveryService {
     _emitDevices();
   }
 
-  Future<void> stop() async {
-    await stopAdvertising();
-    await stopDiscovery();
+  Future<void> stop() {
+    return _runLifecycleOperation(() async {
+      await _stopAdvertisingInternal();
+      await _stopDiscoveryInternal();
+    });
   }
 
   void requestRefresh() {
