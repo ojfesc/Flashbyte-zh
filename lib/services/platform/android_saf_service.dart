@@ -44,12 +44,31 @@ class AndroidSafService {
     return path;
   }
 
-  static Future<SafDocumentFile?> pickDirectory({String? initialUri}) {
+  static Future<SafDocumentFile?> pickDirectory({
+    String? initialUri,
+    bool writePermission = true,
+  }) {
     final saf = Saf();
     return saf.pickDirectory(
       initialUri: initialUri,
-      writePermission: true,
+      writePermission: writePermission,
       persistablePermission: true,
     );
+  }
+
+  /// 递归列出 SAF 目录树下的所有文件。
+  ///
+  /// 返回 (显示名, content:// 文档 URI)：SAF 目录没有文件系统路径，
+  /// 调用方需把 uri 交给传输层，由 SAF 打开文件描述符读取内容。
+  static Future<List<({String name, String uri})>> listFilesUnder(
+    String treeUri,
+  ) async {
+    final files = <({String name, String uri})>[];
+    await for (final entry in Saf().walk(treeUri)) {
+      if (!entry.file.isDir) {
+        files.add((name: entry.file.name, uri: entry.file.uri));
+      }
+    }
+    return files;
   }
 }
