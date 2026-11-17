@@ -428,6 +428,44 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
     try {
       final l10n = AppLocalizations.of(context);
+
+      // Android 的 SAF 目录选择只返回目录树 URI，没有文件系统路径。
+      // 这里遍历目录树，把每个文件作为 content:// 文档加入选择列表，
+      // 传输层再用 SAF 打开这些 URI 读取内容。
+      if (Platform.isAndroid) {
+        final pickedDirectory = await AndroidSafService.pickDirectory(
+          writePermission: false,
+        );
+        if (!mounted || pickedDirectory == null) return;
+
+        final List<({String name, String uri})> documents;
+        try {
+          documents = await AndroidSafService.listFilesUnder(
+            pickedDirectory.uri,
+          );
+        } catch (_) {
+          if (mounted) {
+            showScaffoldSnackbar(l10n.cannotReadFolder);
+          }
+          return;
+        }
+
+        if (!mounted) return;
+
+        if (documents.isEmpty) {
+          showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
+          return;
+        }
+
+        setState(() {
+          selectedFiles = [
+            for (final document in documents)
+              FastFilePickerPath.fromUri(document.name, document.uri),
+          ];
+        });
+        return;
+      }
+
       final pickedFolder = await FastFilePicker.pickFolder(
         writePermission: false,
       );
