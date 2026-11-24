@@ -17,6 +17,18 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (windows != nullptr) {
+    GtkWindow* existing_window = GTK_WINDOW(windows->data);
+    // Dart 侧在首帧前保持窗口隐藏，此时不提前显示，等 window_manager.show()；
+    // 窗口已显示时直接恢复并置前，处理最小化或落在后面的情况。
+    if (gtk_widget_get_visible(GTK_WIDGET(existing_window))) {
+      gtk_window_present(existing_window);
+    }
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -96,6 +108,7 @@ static gboolean my_application_local_command_line(GApplication* application,
   g_application_activate(application);
   *exit_status = 0;
 
+  // 已在本地完成注册与激活；返回 TRUE 阻止 GApplication 再执行默认命令行处理。
   return TRUE;
 }
 
@@ -182,7 +195,9 @@ MyApplication* my_application_new() {
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
 
-  return MY_APPLICATION(g_object_new(my_application_get_type(),
-                                     "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+  // 使用 GApplication 的会话总线单实例锁；第二个进程会转为 remote，
+  // 把激活请求转发给已运行实例，由 activate 负责恢复并置前已有窗口。
+  return MY_APPLICATION(g_object_new(
+      my_application_get_type(), "application-id", APPLICATION_ID, "flags",
+      G_APPLICATION_HANDLES_COMMAND_LINE, nullptr));
 }
