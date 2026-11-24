@@ -176,137 +176,147 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
         (_receiver?['port'] as int?) ?? widget.receiverPreview?.port;
     final totalFiles = widget.files.length;
 
+    final deviceCard = _OfferSurface(
+      title: l10n.devices,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          spacing: 12,
+          children: [
+            _maybeAnimate(
+              context,
+              _ApprovalDeviceRow(
+                label: l10n.thisDevice,
+                name: widget.senderName,
+                detail: _deviceTypeLabel(l10n, widget.senderType),
+                type: widget.senderType,
+                address: l10n.localSenderLabel,
+                port: null,
+                usesTls: widget.senderUsesTls,
+                color: colorScheme.secondaryContainer,
+                foregroundColor: colorScheme.onSecondaryContainer,
+              ),
+              (child) => child
+                  .animate()
+                  .fadeIn(delay: 120.ms, duration: 180.ms)
+                  .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
+            ),
+            _TransferDirectionDivider(
+              secure: receiverUsesTls && widget.senderUsesTls,
+            ),
+            _maybeAnimate(
+              context,
+              _ApprovalDeviceRow(
+                label: l10n.receiver,
+                name: receiverName,
+                detail: _deviceTypeLabel(l10n, receiverType),
+                type: receiverType,
+                address: receiverAddress ?? l10n.addressPending,
+                port: receiverPort,
+                usesTls: receiverUsesTls,
+                fingerprint: receiverFingerprint,
+                color: colorScheme.primaryContainer,
+                foregroundColor: colorScheme.onPrimaryContainer,
+              ),
+              (child) => child
+                  .animate()
+                  .fadeIn(delay: 220.ms, duration: 180.ms)
+                  .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // 文件行按索引构建，宽屏和窄屏两种文件卡片共用同一份内容和动画。
+    Widget buildFileRow(int index) {
+      return _maybeAnimate(
+        context,
+        _ApprovalFileRow(fileName: widget.files[index].name),
+        (child) => child
+            .animate()
+            .fadeIn(delay: (180 + index * 45).ms, duration: 160.ms)
+            .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
+      );
+    }
+
+    final filesCardTitle = l10n.nFilesSelectedCount(totalFiles);
+    final fillingFilesCard = _OfferSurface(
+      title: filesCardTitle,
+      fillChild: true,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        itemCount: widget.files.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
+        itemBuilder: (context, index) => buildFileRow(index),
+      ),
+    );
+    final scrollingFilesCard = _OfferSurface(
+      title: filesCardTitle,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: 8,
+          children: [
+            for (var index = 0; index < widget.files.length; index++)
+              buildFileRow(index),
+          ],
+        ),
+      ),
+    );
+
+    final header = _maybeAnimate(
+      context,
+      _ApprovalHeader(
+        icon: Icons.schedule_send_rounded,
+        title: l10n.waitingForApproval,
+        message: l10n.receiverNeedsToAccept,
+      ),
+      (child) => child
+          .animate()
+          .fadeIn(duration: 180.ms)
+          .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _maybeAnimate(
-          context,
-          _ApprovalHeader(
-            icon: Icons.schedule_send_rounded,
-            title: l10n.waitingForApproval,
-            message: l10n.receiverNeedsToAccept,
-          ),
-          (child) => child
-              .animate()
-              .fadeIn(duration: 180.ms)
-              .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
-        ),
-        const SizedBox(height: 20),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 720;
-              final deviceCard = _OfferSurface(
-                title: l10n.devices,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    spacing: 12,
-                    children: [
-                      _maybeAnimate(
-                        context,
-                        _ApprovalDeviceRow(
-                          label: l10n.thisDevice,
-                          name: widget.senderName,
-                          detail: _deviceTypeLabel(l10n, widget.senderType),
-                          type: widget.senderType,
-                          address: l10n.localSenderLabel,
-                          port: null,
-                          usesTls: widget.senderUsesTls,
-                          color: colorScheme.secondaryContainer,
-                          foregroundColor: colorScheme.onSecondaryContainer,
-                        ),
-                        (child) => child
-                            .animate()
-                            .fadeIn(delay: 120.ms, duration: 180.ms)
-                            .slideY(
-                              begin: 0.05,
-                              end: 0,
-                              curve: Curves.easeOutCubic,
-                            ),
-                      ),
-                      _TransferDirectionDivider(
-                        secure: receiverUsesTls && widget.senderUsesTls,
-                      ),
-                      _maybeAnimate(
-                        context,
-                        _ApprovalDeviceRow(
-                          label: l10n.receiver,
-                          name: receiverName,
-                          detail: _deviceTypeLabel(l10n, receiverType),
-                          type: receiverType,
-                          address: receiverAddress ?? l10n.addressPending,
-                          port: receiverPort,
-                          usesTls: receiverUsesTls,
-                          fingerprint: receiverFingerprint,
-                          color: colorScheme.primaryContainer,
-                          foregroundColor: colorScheme.onPrimaryContainer,
-                        ),
-                        (child) => child
-                            .animate()
-                            .fadeIn(delay: 220.ms, duration: 180.ms)
-                            .slideY(
-                              begin: 0.05,
-                              end: 0,
-                              curve: Curves.easeOutCubic,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-              final filesCard = _OfferSurface(
-                title: l10n.nFilesSelectedCount(totalFiles),
-                fillChild: true,
-                child: Column(
+              if (constraints.maxWidth >= 720) {
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    header,
+                    const SizedBox(height: 20),
                     Expanded(
-                      child: ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                        itemCount: widget.files.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final file = widget.files[index];
-                          return _maybeAnimate(
-                            context,
-                            _ApprovalFileRow(fileName: file.name),
-                            (child) => child
-                                .animate()
-                                .fadeIn(
-                                  delay: (180 + index * 45).ms,
-                                  duration: 160.ms,
-                                )
-                                .slideY(
-                                  begin: 0.05,
-                                  end: 0,
-                                  curve: Curves.easeOutCubic,
-                                ),
-                          );
-                        },
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: deviceCard),
+                          const SizedBox(width: 12),
+                          Expanded(flex: 2, child: fillingFilesCard),
+                        ],
                       ),
                     ),
                   ],
-                ),
-              );
-              if (isWide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(child: deviceCard),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 2, child: filesCard),
-                  ],
                 );
               }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  deviceCard,
-                  const SizedBox(height: 12),
-                  Expanded(child: filesCard),
-                ],
+              // 窄屏高度不足时整块内容一起滚动，卡片和取消按钮都能完整显示。
+              return SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    header,
+                    const SizedBox(height: 20),
+                    deviceCard,
+                    const SizedBox(height: 12),
+                    scrollingFilesCard,
+                  ],
+                ),
               );
             },
           ),
