@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:screen_retriever/screen_retriever.dart';
@@ -29,6 +30,7 @@ class WindowStateManager with WindowListener {
 
   SharedPreferences? _prefs;
   Timer? _saveDebounce;
+  StreamSubscription<Map<String, dynamic>>? _incomingOfferSubscription;
   bool _initialized = false;
 
   /// 当前平台是否支持窗口位置持久化。
@@ -56,6 +58,21 @@ class WindowStateManager with WindowListener {
       windowManager.addListener(this);
       _initialized = true;
     });
+
+    // 传输服务收到对端发起的文件请求时会发布 start 消息，
+    // 窗口在最小化或后台时由该监听恢复到最前。
+    _incomingOfferSubscription = SocketService.instance.messageStream.listen(
+      _handleIncomingOffer,
+    );
+  }
+
+  /// 收到对端主动发起的文件传输时激活窗口，让接收确认界面立即可见。
+  void _handleIncomingOffer(Map<String, dynamic> message) {
+    final status = message['status'] ?? message['command'];
+    if (status != 'start' || message['pendingAcceptance'] != true) {
+      return;
+    }
+    unawaited(_activate());
   }
 
   /// 在 Flutter 首帧渲染完成后调用，显示窗口并执行淡入。
@@ -83,6 +100,39 @@ class WindowStateManager with WindowListener {
       try {
         await windowManager.setOpacity(1);
       } catch (_) {}
+    }
+  }
+
+  /// 恢复窗口层级并激活窗口。
+  Future<void> _activate() async {
+    if (!isDesktop || !_initialized) return;
+
+    var raised = false;
+    try {
+      final minimized = await windowManager.isMinimized();
+      // isFocused 仅 Windows/macOS 支持，其他桌面平台按未聚焦处理。
+      final canCheckFocus = Platform.isWindows || Platform.isMacOS;
+      if (!minimized && canCheckFocus && await windowManager.isFocused()) {
+        return;
+      }
+      if (minimized) {
+        await windowManager.restore();
+      }
+      await windowManager.show();
+      // 临时置顶再取消置顶，保证窗口没有前台焦点时也能回到最上层。
+      await windowManager.setAlwaysOnTop(true);
+      raised = true;
+      await windowManager.focus();
+    } catch (_) {
+      // 窗口正在关闭或当前平台不支持相关操作时忽略。
+    } finally {
+      if (raised) {
+        try {
+          await windowManager.setAlwaysOnTop(false);
+        } catch (_) {
+          // 窗口已关闭时忽略。
+        }
+      }
     }
   }
 
@@ -198,6 +248,7 @@ class WindowStateManager with WindowListener {
 
   void dispose() {
     _saveDebounce?.cancel();
+    _incomingOfferSubscription?.cancel();
     if (_initialized) {
       windowManager.removeListener(this);
     }
