@@ -15,9 +15,12 @@ import UIKit
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 
-    guard let registrar = engineBridge.pluginRegistry.registrar(
+    // 注册自定义通道：判定后台 App 刷新，并打开本应用的系统设置页。
+    // 用显式可选类型接收，无论 SDK 把 registrarForPlugin 标成可空还是非可空都能编译。
+    let registrar: FlutterPluginRegistrar? = engineBridge.pluginRegistry.registrar(
       forPlugin: "BackgroundPermissionChannel"
-    ) else { return }
+    )
+    guard let registrar else { return }
 
     let channel = FlutterMethodChannel(
       name: "flashbyte/battery_optimization",
