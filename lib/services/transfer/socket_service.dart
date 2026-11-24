@@ -459,6 +459,27 @@ class SocketService {
     return result;
   }
 
+  /// 判断传入的文件请求是否已经被接受。
+  ///
+  /// 接受请求不一定经过批准页：用户可以在通知栏直接点“接受”。应用在后台
+  /// 时不渲染新帧，批准页要等回到前台才构建，期间收到的接受消息它收不到，
+  /// 所以批准页打开前必须按这里记录的请求状态判断是否还需要提示批准。
+  bool isIncomingOfferAccepted(String fileId) {
+    final startMessage = _transferStartMessages[fileId];
+    if (startMessage == null) return false;
+
+    // 接收侧开始写文件前会再发一条不带 pendingAcceptance 的 start 消息。
+    if (startMessage['status'] == 'start' &&
+        startMessage['pendingAcceptance'] != true) {
+      return true;
+    }
+
+    final latestStatus = _transferLatestMessages[fileId]?['status'];
+    return latestStatus == 'transfer_accepted' ||
+        latestStatus == 'progress' ||
+        latestStatus == 'completed';
+  }
+
   void _publishMessage(IsolateMessage message) {
     final status = message['status'] ?? message['command'];
     if (status == 'peer_info') {
