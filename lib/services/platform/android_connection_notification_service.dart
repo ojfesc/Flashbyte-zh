@@ -25,7 +25,6 @@ class AndroidConnectionNotificationService {
   static const Duration _progressUpdateInterval = Duration(milliseconds: 500);
 
   static const String _actionPause = 'progress_pause';
-  static const String _actionResume = 'progress_resume';
   static const String _actionCancel = 'progress_cancel';
   static const String _actionSendFile = 'notif_send_file';
   static const String _actionDisconnect = 'notif_disconnect';
@@ -95,13 +94,10 @@ class AndroidConnectionNotificationService {
     final action = receivedAction.buttonKeyPressed;
     switch (action) {
       case _actionPause:
-        _pauseActiveTransfer();
-        break;
-      case _actionResume:
-        _resumeActiveTransfer();
+        _toggleAllPaused();
         break;
       case _actionCancel:
-        _cancelActiveTransfer();
+        _cancelAllTransfers();
         break;
       case _actionSendFile:
         await _pickAndSendFile();
@@ -148,20 +144,39 @@ class AndroidConnectionNotificationService {
     return SocketService.instance.getActiveTransferIsReceived()[fileId];
   }
 
-  void _pauseActiveTransfer() {
-    final fileId = _activeTransferFileId();
-    if (fileId == null) return;
-    final isReceiver = _activeTransferIsReceived(fileId);
-    if (isReceiver == null) return;
-    SocketService.instance.pauseTransfer(fileId, isReceiver: isReceiver);
+  /// 正在传输的文件 id；通知服务还没记录时退回 SocketService 的记录。
+  List<String> _activeTransferIds() {
+    if (_activeTransfers.isNotEmpty) return _activeTransfers.keys.toList();
+    return SocketService.instance.getActiveTransferIsReceived().keys.toList();
   }
 
-  void _resumeActiveTransfer() {
-    final fileId = _activeTransferFileId();
-    if (fileId == null) return;
-    final isReceiver = _activeTransferIsReceived(fileId);
-    if (isReceiver == null) return;
-    SocketService.instance.resumeTransfer(fileId, isReceiver: isReceiver);
+  /// 通知栏的暂停键按整批处理：未全部暂停时全部暂停，全部暂停后变为全部继续。
+  void _toggleAllPaused() {
+    final fileIds = _activeTransferIds();
+    if (fileIds.isEmpty) return;
+    final resume = fileIds.every(_pausedTransfers.contains);
+    for (final fileId in fileIds) {
+      final isReceiver = _activeTransferIsReceived(fileId);
+      if (isReceiver == null) continue;
+      if (resume) {
+        SocketService.instance.resumeTransfer(fileId, isReceiver: isReceiver);
+      } else {
+        SocketService.instance.pauseTransfer(fileId, isReceiver: isReceiver);
+      }
+    }
+  }
+
+  /// 通知栏的取消键按整批处理：取消所有仍在传的文件。
+  void _cancelAllTransfers() {
+    final fileIds = _activeTransferIds();
+    _activeBatchIds.clear();
+    if (fileIds.isEmpty) {
+      _cancelActiveTransfer();
+      return;
+    }
+    for (final fileId in fileIds) {
+      SocketService.instance.cancelTransfer(fileId);
+    }
   }
 
   void _cancelActiveTransfer() {
@@ -736,28 +751,24 @@ class AndroidConnectionNotificationService {
 
     _lastProgressNotificationUpdate = DateTime.now();
 
-    final isPaused = _pausedTransfers.contains(transfer.fileId);
+    final activeIds = _activeTransferIds();
+    final allPaused =
+        activeIds.isNotEmpty && activeIds.every(_pausedTransfers.contains);
     final directionLabel = transfer.direction == 'receiving'
         ? _t('Receiving', '接收中')
         : _t('Sending', '发送中');
     final actions = [
-      if (isPaused)
-        NotificationActionButton(
-          key: _actionResume,
-          label: _t('Resume', '继续'),
-          actionType: ActionType.SilentAction,
-          autoDismissible: false,
-        )
-      else
-        NotificationActionButton(
-          key: _actionPause,
-          label: _t('Pause', '暂停'),
-          actionType: ActionType.SilentAction,
-          autoDismissible: false,
-        ),
+      NotificationActionButton(
+        key: _actionPause,
+        label: allPaused
+            ? _t('Resume all', '全部继续')
+            : _t('Pause all', '全部暂停'),
+        actionType: ActionType.SilentAction,
+        autoDismissible: false,
+      ),
       NotificationActionButton(
         key: _actionCancel,
-        label: _t('Cancel', '取消'),
+        label: _t('Cancel all', '全部取消'),
         actionType: ActionType.SilentAction,
         autoDismissible: false,
       ),
