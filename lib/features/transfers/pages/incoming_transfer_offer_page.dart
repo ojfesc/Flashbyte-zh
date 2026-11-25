@@ -90,7 +90,9 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
       case 'completed':
         if (matchesFile) _closeAsAccepted();
         break;
+      // 请求已被取消或拒绝：批准界面不再需要，按“未被接受”关闭本页。
       case 'transfer_cancelled':
+      case 'transfer_declined':
         if (matchesFile) {
           _isClosing = true;
           Navigator.of(context).pop(false);
