@@ -1201,6 +1201,9 @@ void _handleSocketConnection(
   bool connectionErrorSent = false;
   bool gracefulDisconnect = false;
   bool socketClosed = false;
+
+  // 最近一次收到对端数据的时间；心跳据此判断链路是否还活着。
+  var lastInboundAt = DateTime.now();
   final localUsesTls = localPeerInfo['tls'] == true;
 
   Future<void> cleanupOpenFile() async {
@@ -1865,6 +1868,7 @@ void _handleSocketConnection(
   late StreamSubscription<List<int>> subscription;
   subscription = socket.listen(
     (data) async {
+      lastInboundAt = DateTime.now();
       subscription.pause();
       try {
         readBuffer.add(data);
@@ -1921,6 +1925,54 @@ void _handleSocketConnection(
       closeSocket();
     },
   );
+
+  // 心跳：双方每 3 秒互发 ping，收到任意数据都算链路还在。只读的一方也能靠它
+  // 发现对端掉网，不必等内核的 TCP 重传超时（默认十几分钟才报错）。
+  Timer? heartbeatTimer;
+  var lastHeartbeatTickAt = DateTime.now();
+  heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    if (socketClosed) {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = null;
+      return;
+    }
+
+    final now = DateTime.now();
+    final sinceLastTick = now.difference(lastHeartbeatTickAt);
+    lastHeartbeatTickAt = now;
+
+    // 定时器严重迟到说明本机被系统挂起或长时间忙于同步工作，这段静默不能算掉线。
+    if (sinceLastTick > const Duration(seconds: 10)) {
+      lastInboundAt = now;
+      return;
+    }
+    if (!probeHandled) {
+      // 握手阶段由探测超时兜底，这里只刷新计时，避免把握手耗时当成掉线。
+      lastInboundAt = now;
+      return;
+    }
+    if (subscription.isPaused) {
+      // 正在本地处理数据（例如写文件），对端这段时间收不到进度；刷新本地计时
+      // 以免把自己算成掉线，同时照常发心跳让对端知道本机还在。
+      lastInboundAt = now;
+    } else if (now.difference(lastInboundAt) >= const Duration(seconds: 15)) {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = null;
+      if (!(shouldSuppressConnectionErrors?.call() ?? false) &&
+          !gracefulDisconnect) {
+        sendConnectionError(
+          'Connection lost. The other device disconnected unexpectedly.',
+        );
+      }
+      closeSocket();
+      return;
+    }
+    try {
+      sendControlFrame({'type': 'ping'});
+    } catch (_) {
+      // 写入失败说明 socket 已不可用，收尾交给 onDone / onError。
+    }
+  });
 }
 
 Future<String> _resolveDownloadDirectory({String? commandDirectory}) async {
