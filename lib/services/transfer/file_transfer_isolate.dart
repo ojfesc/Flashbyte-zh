@@ -1281,9 +1281,10 @@ void _handleSocketConnection(
     if (markProbeHandled) {
       probeHandled = true;
     }
+    // fatal 与其它错误消息保持字符串 'true'/'false'，界面按字符串判断是否致命。
     toUiSendPort.send({
       'status': 'error',
-      'fatal': fatal,
+      'fatal': fatal ? 'true' : 'false',
       'message': message,
     });
   }
