@@ -295,6 +295,23 @@ class SocketService {
     });
   }
 
+  /// 逐个发送多个文件：每个文件都是独立的单文件请求，不会合并成批量请求。
+  void sendFilesSeparately(List<String> filePaths) {
+    final sendPort = _toIsolateSendPort;
+    if (sendPort == null || filePaths.isEmpty) {
+      return;
+    }
+    sendPort.send({
+      'command': 'send_files_separately',
+      'filePaths': filePaths,
+    });
+  }
+
+  /// 丢弃还没开始发送的排队文件；正在传的文件用 [cancelTransfer] 结束。
+  void cancelQueuedSends() {
+    _toIsolateSendPort?.send({'command': 'cancel_queued_sends'});
+  }
+
   void pauseTransfer(String fileId, {required bool isReceiver}) {
     _sendTransferControl(
       'pause_transfer',
