@@ -51,6 +51,8 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
   // 从系统设置返回时重新检查：放行后对应的引导框自动消失
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 生命周期写进日志，用于核对传输中断是否发生在应用切到后台之后。
+    debugPrint('[SESSION] app lifecycle ${state.name}');
     if (state == AppLifecycleState.resumed) {
       unawaited(_refresh());
     }
