@@ -32,9 +32,6 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
   bool? _batteryExempt;
   bool? _notificationsAllowed;
 
-  // 本次运行内点过“暂时不要”后，不再重复提示通知权限
-  bool _notificationSkipped = false;
-
   // 只有移动端需要申请，桌面端没有对应开关
   bool get _isMobile => Platform.isAndroid || Platform.isIOS;
 
@@ -123,8 +120,7 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
     }
   }
 
-  bool get _needsNotificationPermission =>
-      _notificationsAllowed == false && !_notificationSkipped;
+  bool get _needsNotificationPermission => _notificationsAllowed == false;
 
   bool get _needsBatteryExemption => _batteryExempt == false;
 
@@ -143,10 +139,7 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
         const ModalBarrier(color: Color(0x99000000), dismissible: false),
         Center(
           child: _needsNotificationPermission
-              ? _NotificationPermissionDialog(
-                  onGo: _openNotificationSettings,
-                  onSkip: () => setState(() => _notificationSkipped = true),
-                )
+              ? _NotificationPermissionDialog(onGo: _openNotificationSettings)
               : _BatteryPermissionDialog(onGo: _openBatterySettings),
         ),
       ],
@@ -154,15 +147,11 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
   }
 }
 
-/// 通知权限引导框：说明用途后跳系统通知设置；“暂时不要”只跳过本次提示。
+/// 通知权限引导框：说明用途后跳系统通知设置，不提供跳过。
 class _NotificationPermissionDialog extends StatelessWidget {
-  const _NotificationPermissionDialog({
-    required this.onGo,
-    required this.onSkip,
-  });
+  const _NotificationPermissionDialog({required this.onGo});
 
   final VoidCallback onGo;
-  final VoidCallback onSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -171,7 +160,6 @@ class _NotificationPermissionDialog extends StatelessWidget {
       title: Text(l10n.notificationPermissionTitle),
       content: Text(l10n.notificationPermissionMessage),
       actions: [
-        TextButton(onPressed: onSkip, child: Text(l10n.notNow)),
         FilledButton(onPressed: onGo, child: Text(l10n.goToEnable)),
       ],
     );
