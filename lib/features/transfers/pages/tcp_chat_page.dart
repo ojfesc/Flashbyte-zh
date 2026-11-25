@@ -8,11 +8,13 @@ import 'package:flashbyte/services/sharing/incoming_share_service.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
-import 'package:flashbyte/models/user_facing_error.dart';
 import 'package:flashbyte/features/transfers/widgets/transfer_widget.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+
+/// 会话异常结束的两种结果；底部发送入口按它选择显示的文案和图标。
+enum _SessionIssue { connectionLost, transferInterrupted }
 
 class TcpChatPage extends StatefulWidget {
   final List<FastFilePickerPath> initialFiles;
@@ -45,10 +47,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   bool isSharingInProgress = false;
   bool _sentInitialFiles = false;
-  bool _errorDialogVisible = false;
   bool _disconnectSignalSent = false;
   bool _leavingPage = false;
   bool _suppressNextConnectionIssueAfterCancellation = false;
+  _SessionIssue? _sessionIssue;
   Map<String, dynamic>? _peerInfo;
 
   StreamSubscription? _streamSubscription;
@@ -255,7 +257,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 message['message'] as String? ??
                 AppLocalizations.of(context).unknownError;
             if (isFatal) {
-              _showErrorAfterCancellationWindow(errorText);
+              // 致命错误不再弹窗，只按会话结束处理；原因写进日志便于排查。
+              debugPrint('[SESSION] fatal error: $errorText');
+              _reportSessionIssueAfterCancellationWindow();
             } else {
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
@@ -625,14 +629,28 @@ class _TcpChatPageState extends State<TcpChatPage> {
   }
 
   /// 空闲时显示三个发送入口；传输中或连接断开时显示一个不可点击的状态按键。
+  ///
+  /// 连接断开后按键直接显示结果：打断过未完成的传输时显示“传输被中断”，
+  /// 传输都已结束时显示“连接已断开”。
   Widget _buildTransferActions({required bool isConnectionLost}) {
     final l10n = AppLocalizations.of(context);
     if (isConnectionLost || isSharingInProgress) {
+      final interrupted =
+          isConnectionLost &&
+          _sessionIssue == _SessionIssue.transferInterrupted;
+      final icon = isConnectionLost
+          ? interrupted
+              ? Icons.sync_problem_rounded
+              : Icons.link_off_rounded
+          : Icons.hourglass_top_rounded;
+      final title = isConnectionLost
+          ? interrupted
+              ? l10n.transferInterrupted
+              : l10n.connectionLost
+          : l10n.transferInProgress;
       return _buildTransferStatusButton(
-        icon: isConnectionLost
-            ? Icons.link_off_rounded
-            : Icons.hourglass_top_rounded,
-        title: isConnectionLost ? l10n.connectionLost : l10n.transferInProgress,
+        icon: icon,
+        title: title,
         subtitle: isConnectionLost
             ? l10n.reconnectToSendMore
             : l10n.waitForTransferToFinish,
@@ -893,68 +911,30 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
-  void _showConnectionIssueDialog({required String message}) {
-    if (_errorDialogVisible || !mounted) {
-      return;
-    }
-    final l10n = AppLocalizations.of(context);
-    final error = UserFacingError.from(message);
-    final displayMessage = l10n.localizeError(error.message);
-    final colorScheme = Theme.of(context).colorScheme;
+  /// 列表里是否还有没结束的传输（排队、待批准、传输中或已暂停）。
+  bool _hasUnfinishedTransfers() {
+    return _fileTransferWidgets.value.any(
+      (widget) =>
+          widget.status != TransferStatus.completed &&
+          widget.status != TransferStatus.cancelled,
+    );
+  }
 
+  /// 记录会话异常结束，底部发送入口据此显示断开原因。
+  ///
+  /// 仍有未结束的传输时说明这次断开打断了传输；传输都已完成或取消时，
+  /// 只是连接断开。结果只记一次，之后重复的断开不再改变显示。
+  void _reportSessionIssue() {
+    if (!mounted) return;
+
+    final interrupted = isSharingInProgress || _hasUnfinishedTransfers();
     setState(() {
       isSharingInProgress = false;
+      _sessionIssue ??= interrupted
+          ? _SessionIssue.transferInterrupted
+          : _SessionIssue.connectionLost;
     });
     isDisconnected.value = true;
-    _errorDialogVisible = true;
-
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: "Close Dialog",
-      pageBuilder: (context, animation, secondaryAnimation) => AlertDialog(
-        title: Row(
-          spacing: 10,
-          children: [
-            Icon(
-              Icons.error_rounded,
-              color: colorScheme.onErrorContainer,
-            ),
-            Text(l10n.connectionLostDialog),
-          ],
-        ),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          spacing: 10,
-          children: [
-            Text(displayMessage),
-            if (error.hasDetails)
-              Card(
-                margin: EdgeInsets.zero,
-                color: colorScheme.surfaceContainerHighest,
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    child: SingleChildScrollView(
-                      child: SelectableText(
-                        error.details!,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    ).then((_) {
-      _errorDialogVisible = false;
-    });
   }
 
   void _scrollToBottom() {
@@ -1219,9 +1199,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       return;
     }
     if (!_leavingPage && isSharingInProgress) {
-      _showConnectionIssueDialog(
-        message: AppLocalizations.of(context).connectionLostDuringTransfer,
-      );
+      _reportSessionIssue();
     } else if (!_leavingPage) {
       Navigator.pop(context);
       showScaffoldSnackbar(
@@ -1230,14 +1208,15 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
-  Future<void> _showErrorAfterCancellationWindow(String message) async {
+  /// 用户主动取消后的宽限期内不报异常，避免把取消引起的断开算成传输中断。
+  Future<void> _reportSessionIssueAfterCancellationWindow() async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted ||
         _disconnectSignalSent ||
         _suppressNextConnectionIssueAfterCancellation) {
       return;
     }
-    _showConnectionIssueDialog(message: message);
+    _reportSessionIssue();
   }
 
   String sizeConvert(double bytes) {
