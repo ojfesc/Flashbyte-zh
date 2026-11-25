@@ -44,6 +44,9 @@ class FileSelectionPage extends StatefulWidget {
 
 enum _ServerNetworkMode { hotspot, wifi, mobile, ethernet, vpn, offline, other }
 
+/// 当前正在打开的选择器；文件与文件夹按钮据此各自显示“正在选择…”。
+enum _PickTarget { files, folder }
+
 class _FileSelectionPageState extends State<FileSelectionPage>
     with TickerProviderStateMixin {
   static const double _wideLayoutBreakpoint = 1000;
@@ -61,7 +64,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   late final TabController _tabController;
   late final AnimationController _discoveryRefreshController;
 
-  bool isPickingFile = false;
+  // 正在打开的选择器；null 表示空闲。
+  _PickTarget? _pickingTarget;
+
+  bool get isPickingFile => _pickingTarget != null;
   bool isConnectingToSender = false;
   bool isReceiveStarting = false;
   bool receiveStarted = false;
@@ -406,7 +412,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   Future<void> _pickFiles() async {
     setState(() {
-      isPickingFile = true;
+      _pickingTarget = _PickTarget.files;
     });
 
     try {
@@ -420,7 +426,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     } finally {
       if (mounted) {
         setState(() {
-          isPickingFile = false;
+          _pickingTarget = null;
         });
       }
     }
@@ -428,7 +434,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   Future<void> _pickFolder() async {
     setState(() {
-      isPickingFile = true;
+      _pickingTarget = _PickTarget.folder;
     });
 
     try {
@@ -519,7 +525,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     } finally {
       if (mounted) {
         setState(() {
-          isPickingFile = false;
+          _pickingTarget = null;
         });
       }
     }
@@ -2282,7 +2288,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               _buildSelectionAction(
                 icon: Icons.content_paste_rounded,
                 label: l10n.clipboard,
-                flex: 3,
+                flex: 1,
                 borderRadius: const BorderRadius.horizontal(
                   left: Radius.circular(20),
                 ),
@@ -2291,16 +2297,20 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               _buildSelectionActionDivider(colorScheme),
               _buildSelectionAction(
                 icon: Icons.file_present_rounded,
-                label: isPickingFile ? l10n.picking : l10n.file,
-                flex: 3,
+                label: _pickingTarget == _PickTarget.files
+                    ? l10n.picking
+                    : l10n.file,
+                flex: 1,
                 borderRadius: BorderRadius.zero,
                 onTap: _pickFiles,
               ),
               _buildSelectionActionDivider(colorScheme),
               _buildSelectionAction(
                 icon: Icons.folder_open_rounded,
-                label: l10n.folder,
-                flex: 2,
+                label: _pickingTarget == _PickTarget.folder
+                    ? l10n.picking
+                    : l10n.folder,
+                flex: 1,
                 borderRadius: const BorderRadius.horizontal(
                   right: Radius.circular(20),
                 ),
