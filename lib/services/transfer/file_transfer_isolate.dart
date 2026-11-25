@@ -1249,12 +1249,18 @@ void _handleSocketConnection(
   }
 
   void sendControlFrame(Map<String, dynamic> payload) {
-    final payloadBytes = utf8.encode(jsonEncode(payload));
-    final header = ByteData(8);
-    header.setUint32(0, payloadBytes.length, Endian.big);
-    header.setUint32(4, 0, Endian.big);
-    socket.add(header.buffer.asUint8List());
-    socket.add(payloadBytes);
+    try {
+      final payloadBytes = utf8.encode(jsonEncode(payload));
+      final header = ByteData(8);
+      header.setUint32(0, payloadBytes.length, Endian.big);
+      header.setUint32(4, 0, Endian.big);
+      socket.add(header.buffer.asUint8List());
+      socket.add(payloadBytes);
+    } catch (e) {
+      // 连接已断时写帧会抛异常，由 socket 的 onError/onDone 上报本次会话结束；
+      // 这里吞掉，避免异常冒到读循环变成未捕获异常。
+      debugPrint('[FRAME] sendControlFrame failed: $e');
+    }
   }
 
   void sendLocalPeerInfo() {
@@ -1917,6 +1923,8 @@ void _handleSocketConnection(
       } else if (!connectionErrorSent &&
           !gracefulDisconnect &&
           !suppressErrors) {
+        // 标记已上报，避免随后的 onDone 再报一次同样的会话结束。
+        connectionErrorSent = true;
         toUiSendPort.send({
           'status': 'error',
           'fatal': 'true',
@@ -1959,6 +1967,8 @@ void _handleSocketConnection(
     } else if (now.difference(lastInboundAt) >= const Duration(seconds: 15)) {
       heartbeatTimer?.cancel();
       heartbeatTimer = null;
+      // 明确标记是心跳判死，和 socket 报错、对端关闭连接区分开。
+      debugPrint('[SESSION] heartbeat timeout');
       if (!(shouldSuppressConnectionErrors?.call() ?? false) &&
           !gracefulDisconnect) {
         sendConnectionError(
