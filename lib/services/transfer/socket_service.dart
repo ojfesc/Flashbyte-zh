@@ -200,7 +200,9 @@ class SocketService {
         if (status == 'client_connected' || status == 'connected_to_host') {
           _disconnectRequested = false;
           _setConnectionEstablished(true);
-        } else if (status == 'disconnect' || status == 'error') {
+        } else if (status == 'disconnect' ||
+            (status == 'error' && typedMessage['fatal'] == 'true')) {
+          // 只有致命错误代表连接结束；普通操作错误不影响会话状态。
           _setConnectionEstablished(false);
           if (status == 'disconnect') {
             _completeDisconnectWaiter();
