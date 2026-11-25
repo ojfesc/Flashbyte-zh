@@ -50,6 +50,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
   bool _disconnectSignalSent = false;
   bool _leavingPage = false;
   bool _suppressNextConnectionIssueAfterCancellation = false;
+  bool _fatalErrorReceived = false;
   _SessionIssue? _sessionIssue;
   Map<String, dynamic>? _peerInfo;
 
@@ -259,8 +260,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
             if (isFatal) {
               // 致命错误不再弹窗，只按会话结束处理；原因写进日志便于排查。
               debugPrint('[SESSION] fatal error: $errorText');
+              _fatalErrorReceived = true;
               _reportSessionIssueAfterCancellationWindow();
-            } else {
+            } else if (!_fatalErrorReceived) {
+              // 会话已经因致命错误结束时，逐文件上报的普通错误不再重复提示。
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
