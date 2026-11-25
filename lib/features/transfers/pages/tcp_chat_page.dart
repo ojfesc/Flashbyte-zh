@@ -405,10 +405,20 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                   Expanded(
                                     child: ValueListenableBuilder(
                                       valueListenable: isDisconnected,
-                                      builder: (context, value, child) =>
+                                      builder: (context, value, child) => Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        spacing: 10,
+                                        children: [
+                                          // 传输中在状态按键上方提供整批操作。
+                                          if (!value && isSharingInProgress)
+                                            _buildBatchTransferControls(),
                                           _buildTransferActions(
                                             isConnectionLost: value,
                                           ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -628,6 +638,44 @@ class _TcpChatPageState extends State<TcpChatPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 传输中显示的整批操作：全部暂停（全部暂停后变为全部继续）、全部取消。
+  Widget _buildBatchTransferControls() {
+    return ValueListenableBuilder<List<TransferWidget>>(
+      valueListenable: _fileTransferWidgets,
+      builder: (context, widgets, child) {
+        final l10n = AppLocalizations.of(context);
+        final allPaused = _allPaused(widgets);
+        return Row(
+          spacing: 10,
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: _toggleAllPaused,
+                icon: Icon(
+                  allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                ),
+                label: Text(allPaused ? l10n.resumeAll : l10n.pauseAll),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                ),
+              ),
+            ),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _cancelAllTransfers,
+                icon: const Icon(Icons.close_rounded),
+                label: Text(l10n.cancelAll),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1176,6 +1224,53 @@ class _TcpChatPageState extends State<TcpChatPage> {
       _suppressNextConnectionIssueAfterCancellation = true;
     }
     SocketService.instance.cancelTransfer(fileId);
+  }
+
+  /// 未结束的传输是否全部处于暂停状态。
+  bool _allPaused(List<TransferWidget> widgets) {
+    final active = widgets.where(
+      (widget) =>
+          widget.status != TransferStatus.completed &&
+          widget.status != TransferStatus.cancelled,
+    );
+    return active.isNotEmpty &&
+        active.every((widget) => widget.status == TransferStatus.paused);
+  }
+
+  /// 全部暂停与全部继续的切换，按钮文案由 [_allPaused] 决定。
+  void _toggleAllPaused() {
+    final widgets = _fileTransferWidgets.value;
+    final resume = _allPaused(widgets);
+    for (final widget in widgets) {
+      if (widget.status == TransferStatus.completed ||
+          widget.status == TransferStatus.cancelled) {
+        continue;
+      }
+      if (resume) {
+        if (widget.status != TransferStatus.paused) continue;
+        SocketService.instance.resumeTransfer(
+          widget.uuid,
+          isReceiver: widget.isReceived,
+        );
+      } else {
+        if (widget.status == TransferStatus.paused) continue;
+        SocketService.instance.pauseTransfer(
+          widget.uuid,
+          isReceiver: widget.isReceived,
+        );
+      }
+    }
+  }
+
+  /// 取消所有尚未结束的传输；发送方向按用户取消处理，避免被当成连接异常。
+  void _cancelAllTransfers() {
+    for (final widget in _fileTransferWidgets.value) {
+      if (widget.status == TransferStatus.completed ||
+          widget.status == TransferStatus.cancelled) {
+        continue;
+      }
+      _cancelTransfer(widget.uuid, isReceived: widget.isReceived);
+    }
   }
 
   Future<void> _handleDisconnectAfterCancellationWindow() async {
