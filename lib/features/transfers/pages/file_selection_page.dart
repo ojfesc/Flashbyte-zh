@@ -740,17 +740,6 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     DeviceDiscoveryService.instance.requestRefresh();
   }
 
-  Future<void> _generateDeviceName() async {
-    _nameSaveDebounce?.cancel();
-    final name = await AppSettings.generateDeviceName();
-    if (!mounted) return;
-    setState(() {
-      deviceName = name;
-      _deviceNameController.text = name;
-    });
-    await _refreshAdvertisement();
-  }
-
   Future<void> _resetDeviceName() async {
     _nameSaveDebounce?.cancel();
     final modelName =
@@ -2073,21 +2062,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
               IconButton(
                 tooltip: l10n.resetToDeviceName,
                 onPressed: _settingsLocked ? null : _resetDeviceName,
-                icon: const Icon(Icons.close_rounded),
+                icon: const Icon(Icons.restart_alt_rounded),
                 color: colorScheme.onPrimaryContainer,
                 style: IconButton.styleFrom(
                   minimumSize: const Size.square(44),
                 ),
               ),
-            IconButton(
-              tooltip: l10n.generateNewName,
-              onPressed: _settingsLocked ? null : _generateDeviceName,
-              icon: const Icon(Icons.refresh_rounded),
-              color: colorScheme.onPrimaryContainer,
-              style: IconButton.styleFrom(
-                minimumSize: const Size.square(44),
-              ),
-            ),
           ],
         ),
       ),
@@ -2323,7 +2303,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     );
   }
 
-  /// 发送方式按钮：粘贴板 / 文件 / 文件夹共用同一套配色与禁用规则。
+  /// 发送方式按钮：粘贴板 / 文件 / 文件夹，选中文件后也保持同一配色。
   Widget _buildSelectionAction({
     required IconData icon,
     required String label,
@@ -2332,15 +2312,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     required VoidCallback onTap,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final emphasized = selectedFiles.isEmpty;
     final disabled = isPickingFile || isConnectingToSender;
 
     return Expanded(
       flex: flex,
       child: Material(
-        color: emphasized
-            ? colorScheme.primaryContainer
-            : colorScheme.surfaceContainerHighest,
+        color: colorScheme.primaryContainer,
         borderRadius: borderRadius,
         child: InkWell(
           onTap: disabled ? null : onTap,
@@ -2355,9 +2332,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                   Icon(
                     icon,
                     size: 20,
-                    color: emphasized
-                        ? colorScheme.onPrimaryContainer
-                        : colorScheme.onSurfaceVariant,
+                    color: colorScheme.onPrimaryContainer,
                   ),
                   Flexible(
                     child: Text(
@@ -2365,9 +2340,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: emphasized
-                            ? colorScheme.onPrimaryContainer
-                            : colorScheme.onSurface,
+                        color: colorScheme.onPrimaryContainer,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -2385,9 +2358,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     return Container(
       width: 1,
       height: 58,
-      color: selectedFiles.isEmpty
-          ? colorScheme.onPrimaryContainer.withValues(alpha: 0.15)
-          : colorScheme.onSurfaceVariant.withValues(alpha: 0.15),
+      color: colorScheme.onPrimaryContainer.withValues(alpha: 0.15),
     );
   }
 
