@@ -488,8 +488,44 @@ class SocketService {
         latestStatus == 'completed';
   }
 
+  /// 判断传入的文件请求是否已经被拒绝或取消。
+  ///
+  /// 与“已接受”同理：用户可能在通知栏直接拒绝请求，或发送方在另一端取消，
+  /// 而批准页要等应用回到前台才构建，期间的消息它收不到。批准页打开前先按
+  /// 这里记录的最新状态判断请求是否已经结束，已结束就不再显示批准界面。
+  bool isIncomingOfferResolved(String fileId) {
+    final startMessage = _transferStartMessages[fileId];
+    if (startMessage == null) return false;
+
+    final latestStatus = _transferLatestMessages[fileId]?['status'];
+    return latestStatus == 'transfer_cancelled' ||
+        latestStatus == 'transfer_declined';
+  }
+
+  /// 发送方取消请求时，把仍处于待批准状态的传入请求标记为已取消。
+  ///
+  /// 取消帧本身不带文件 id；批准页可能还没构建、收不到后续消息，所以这里
+  /// 把记录里的待批准请求补上结束状态，让批准页打开时能直接关闭。
+  void _markPendingIncomingOffersCancelled() {
+    for (final entry in _transferStartMessages.entries) {
+      final startMessage = entry.value;
+      final isPendingIncoming =
+          startMessage['status'] == 'start' &&
+          startMessage['pendingAcceptance'] == true;
+      if (!isPendingIncoming) continue;
+      if (_transferLatestMessages.containsKey(entry.key)) continue;
+      _transferLatestMessages[entry.key] = {
+        'status': 'transfer_cancelled',
+        'fileId': entry.key,
+      };
+    }
+  }
+
   void _publishMessage(IsolateMessage message) {
     final status = message['status'] ?? message['command'];
+    if (status == 'offer_cancelled_by_sender') {
+      _markPendingIncomingOffersCancelled();
+    }
     if (status == 'peer_info') {
       _connectedPeerInfo = Map<String, dynamic>.from(message);
       unawaited(
