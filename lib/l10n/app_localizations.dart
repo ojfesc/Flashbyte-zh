@@ -30,6 +30,13 @@ class AppLocalizations {
       isZh ? '返回文件选择' : 'Back to file selection';
   String get unknownDevice => isZh ? '未知设备' : 'Unknown device';
 
+  // 粘贴板发送
+  String get clipboard => isZh ? '粘贴板' : 'Clipboard';
+  String get file => isZh ? '文件' : 'File';
+  String get clipboardFileName => isZh ? '粘贴板文本.txt' : 'Clipboard.txt';
+  String get clipboardEmpty =>
+      isZh ? '粘贴板没有可发送的文本。' : 'The clipboard has no text to send.';
+
   // 主页
   String get localFileSharing => isZh ? '本地文件分享' : 'Local file sharing';
   String get sendFiles => isZh ? '发送文件' : 'Send files';
