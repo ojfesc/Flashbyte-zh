@@ -374,6 +374,9 @@ class AppLocalizations {
   String get statusReceiving => isZh ? '接收中' : 'receiving';
   String get statusSending => isZh ? '发送中' : 'sending';
   String get pause => isZh ? '暂停' : 'Pause';
+  String get pauseAll => isZh ? '全部暂停' : 'Pause all';
+  String get resumeAll => isZh ? '全部继续' : 'Resume all';
+  String get cancelAll => isZh ? '全部取消' : 'Cancel all';
   String get continueAction => isZh ? '继续' : 'Continue';
   String get accept => isZh ? '接受' : 'Accept';
   String get waitingForReceiverToAccept =>
