@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// 后台运行权限门禁。
+/// 启动权限门禁。
 ///
-/// Android 需要“电池优化豁免”，iOS 需要“后台 App 刷新”，否则应用转入后台后进程会被
-/// 系统冻结，活动连接与文件传输都会中断。未放行时用不可关闭的遮罩弹窗挡住整个界面，
-/// 只保留标题与【前往】按钮；放行后遮罩自动消失。
+/// 应用依赖两项系统权限：通知权限（常驻通知展示传输进度与连接状态）和电池优化豁免
+/// （iOS 为后台 App 刷新，缺少时应用转入后台会被系统挂起）。未满足时用不可穿透的
+/// 遮罩挡住界面，并按“通知权限 → 电池优化”的顺序只显示第一个缺失项的引导框；
+/// 用户处理完一项回到应用后，再检查并提示下一项。
 class BackgroundPermissionGate extends StatefulWidget {
   const BackgroundPermissionGate({required this.child, super.key});
 
@@ -27,7 +29,11 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
   );
 
   // true 已放行；false 未放行；null 尚未检查完成
-  bool? _granted;
+  bool? _batteryExempt;
+  bool? _notificationsAllowed;
+
+  // 本次运行内点过“暂时不要”后，不再重复提示通知权限
+  bool _notificationSkipped = false;
 
   // 只有移动端需要申请，桌面端没有对应开关
   bool get _isMobile => Platform.isAndroid || Platform.isIOS;
@@ -45,7 +51,7 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
     super.dispose();
   }
 
-  // 从系统设置返回时重新检查：放行后遮罩自动消失
+  // 从系统设置返回时重新检查：放行后对应的引导框自动消失
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -55,30 +61,59 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
 
   Future<void> _refresh() async {
     if (!_isMobile) {
-      if (mounted && _granted != true) {
-        setState(() => _granted = true);
+      if (mounted && _batteryExempt != true) {
+        setState(() {
+          _batteryExempt = true;
+          _notificationsAllowed = true;
+        });
       }
       return;
     }
 
-    bool granted;
-    try {
-      granted =
-          await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ??
-          true;
-    } on MissingPluginException {
-      // 原生侧没有实现该通道时不拦截，避免旧安装包被永久挡住
-      granted = true;
-    } on PlatformException {
-      granted = true;
-    }
-
-    if (mounted && granted != _granted) {
-      setState(() => _granted = granted);
+    final batteryExempt = await _readBatteryExempt();
+    final notificationsAllowed = await _readNotificationsAllowed();
+    if (!mounted) return;
+    if (batteryExempt != _batteryExempt ||
+        notificationsAllowed != _notificationsAllowed) {
+      setState(() {
+        _batteryExempt = batteryExempt;
+        _notificationsAllowed = notificationsAllowed;
+      });
     }
   }
 
-  Future<void> _openSettings() async {
+  Future<bool> _readBatteryExempt() async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'isIgnoringBatteryOptimizations',
+          ) ??
+          true;
+    } on MissingPluginException {
+      // 原生侧没有实现该通道时不拦截，避免旧安装包被永久挡住
+      return true;
+    } on PlatformException {
+      return true;
+    }
+  }
+
+  Future<bool> _readNotificationsAllowed() async {
+    try {
+      return await AwesomeNotifications().isNotificationAllowed();
+    } catch (_) {
+      // 查询失败时不拦截，避免把用户挡在门外
+      return true;
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    try {
+      await AwesomeNotifications().showNotificationConfigPage();
+    } catch (_) {
+      // 系统页面打开失败时忽略，回到应用后会重新检查
+    }
+  }
+
+  Future<void> _openBatterySettings() async {
     try {
       await _channel.invokeMethod<void>('openAppInfoSettings');
     } on MissingPluginException {
@@ -88,61 +123,85 @@ class _BackgroundPermissionGateState extends State<BackgroundPermissionGate>
     }
   }
 
+  bool get _needsNotificationPermission =>
+      _notificationsAllowed == false && !_notificationSkipped;
+
+  bool get _needsBatteryExemption => _batteryExempt == false;
+
   @override
   Widget build(BuildContext context) {
-    if (!_isMobile || _granted != false) {
+    if (!_isMobile ||
+        (!_needsNotificationPermission && !_needsBatteryExemption)) {
       return widget.child;
     }
 
-    // 遮罩层铺满整个应用，点击不会穿透，也没有任何关闭入口
+    // 遮罩铺满整个应用，点击不会穿透；同一时刻只显示一个引导框
     return Stack(
       fit: StackFit.expand,
       children: [
         widget.child,
         const ModalBarrier(color: Color(0x99000000), dismissible: false),
         Center(
-          child: _BlockingPermissionCard(onGo: _openSettings),
+          child: _needsNotificationPermission
+              ? _NotificationPermissionDialog(
+                  onGo: _openNotificationSettings,
+                  onSkip: () => setState(() => _notificationSkipped = true),
+                )
+              : _BatteryPermissionDialog(onGo: _openBatterySettings),
         ),
       ],
     );
   }
 }
 
-/// 不可关闭的权限卡片：只有标题与【前往】按钮
-class _BlockingPermissionCard extends StatelessWidget {
-  const _BlockingPermissionCard({required this.onGo});
+/// 通知权限引导框：说明用途后跳系统通知设置；“暂时不要”只跳过本次提示。
+class _NotificationPermissionDialog extends StatelessWidget {
+  const _NotificationPermissionDialog({
+    required this.onGo,
+    required this.onSkip,
+  });
+
+  final VoidCallback onGo;
+  final VoidCallback onSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(l10n.notificationPermissionTitle),
+      content: Text(l10n.notificationPermissionMessage),
+      actions: [
+        TextButton(onPressed: onSkip, child: Text(l10n.notNow)),
+        FilledButton(onPressed: onGo, child: Text(l10n.goToEnable)),
+      ],
+    );
+  }
+}
+
+/// 电池优化/后台刷新引导框：属于应用后台运行的前提，不提供跳过。
+class _BatteryPermissionDialog extends StatelessWidget {
+  const _BatteryPermissionDialog({required this.onGo});
 
   final VoidCallback onGo;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final title = Platform.isIOS
-        ? l10n.backgroundRefreshGateTitle
-        : l10n.batteryOptimizationGateTitle;
-
-    return Card(
-      elevation: 12,
-      margin: const EdgeInsets.symmetric(horizontal: 40),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                title,
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextButton(onPressed: onGo, child: Text(l10n.goToSettings)),
-          ],
-        ),
+    final isIos = Platform.isIOS;
+    return AlertDialog(
+      title: Text(
+        isIos
+            ? l10n.backgroundRefreshGateTitle
+            : l10n.batteryOptimizationGateTitle,
       ),
+      content: Text(
+        isIos
+            ? l10n.backgroundRefreshGateMessage
+            : l10n.batteryOptimizationGateMessage,
+      ),
+      actions: [
+        FilledButton(onPressed: onGo, child: Text(l10n.goToEnable)),
+      ],
     );
   }
 }
