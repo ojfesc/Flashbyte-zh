@@ -56,6 +56,16 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
       return;
     }
 
+    // 同上：请求可能在通知栏被拒绝，或被发送方取消而本页尚未订阅，
+    // 记录里已经是结束状态时直接关闭，不再显示批准界面。
+    if (_fileIds.any(SocketService.instance.isIncomingOfferResolved)) {
+      _isClosing = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).pop(false);
+      });
+      return;
+    }
+
     _subscription = SocketService.instance.messageStream.listen(
       _handleSocketMessage,
     );
