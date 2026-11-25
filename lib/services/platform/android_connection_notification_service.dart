@@ -504,7 +504,16 @@ class AndroidConnectionNotificationService {
 
   void _cancelPendingOffer() {
     if (_pendingOffers.isEmpty) return;
-    SocketService.instance.cancelOutgoingOffer();
+
+    // 取消要落到发送队列：只结束请求协商时，发送方仍会停在等待同意的循环里，
+    // 接收方之后接受仍会开始传输。逐个文件取消传输后，隔离区会标记已取消、
+    // 通知接收方，并把 transfer_cancelled 推给界面。
+    for (final fileId in List<String>.of(_pendingOffers)) {
+      SocketService.instance.cancelTransfer(fileId);
+    }
+
+    // 同时结束本次请求协商，让审批页等界面按“已取消”关闭。
+    unawaited(SocketService.instance.cancelOutgoingOffer());
   }
 
   void _scheduleProgressNotificationUpdate({bool force = false}) {
