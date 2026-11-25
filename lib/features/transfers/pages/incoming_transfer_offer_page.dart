@@ -66,6 +66,13 @@ class _IncomingTransferOfferPageState extends State<IncomingTransferOfferPage> {
       return;
     }
 
+    // 请求也可能随连接一起结束（对端掉网、本机断网、对方退出），而断开消息在本页
+    // 构建前就已过去。会话已经不存在时不再让用户批准，直接显示连接已结束。
+    if (!SocketService.instance.hasEstablishedConnection) {
+      _outcome = _IncomingOfferOutcome.connectionEnded;
+      return;
+    }
+
     _subscription = SocketService.instance.messageStream.listen(
       _handleSocketMessage,
     );
