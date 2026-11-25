@@ -5,7 +5,9 @@ import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
+import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flashbyte/models/user_facing_error.dart';
 import 'package:flashbyte/features/transfers/widgets/transfer_widget.dart';
 import 'package:flutter/foundation.dart';
@@ -127,6 +129,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 ),
                 uuid: fileId,
                 isReceived: true,
+                clipboard: message['clipboard'] == true,
                 status: TransferStatus.pending,
               );
               break;
@@ -141,6 +144,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
               fileSize: sizeConvert((message['fileSize'] as int).toDouble()),
               uuid: fileId,
               isReceived: true,
+              clipboard: message['clipboard'] == true,
               status: TransferStatus.inProgress,
             );
             break;
@@ -190,6 +194,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 (message['fileSize'] as int?)?.toDouble() ?? 0,
               ),
               isReceived: false,
+              clipboard: message['clipboard'] == true,
               status: transferStatus,
             );
             break;
@@ -394,7 +399,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                     child: ValueListenableBuilder(
                                       valueListenable: isDisconnected,
                                       builder: (context, value, child) =>
-                                          _buildPickFileButton(
+                                          _buildTransferActions(
                                             isConnectionLost: value,
                                           ),
                                     ),
@@ -619,95 +624,91 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  Widget _buildPickFileButton({required bool isConnectionLost}) {
+  /// 分享页底部的三个发送入口：粘贴板 / 文件 / 文件夹。
+  Widget _buildTransferActions({required bool isConnectionLost}) {
     final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final disabledColor = colorScheme.onSurfaceVariant;
     final disabled = isConnectionLost || isSharingInProgress;
-    final title = isConnectionLost
-        ? l10n.connectionLost
-        : isSharingInProgress
-        ? l10n.transferInProgress
-        : l10n.pickFile;
-    final subtitle = isConnectionLost
-        ? l10n.reconnectToSendMore
-        : isSharingInProgress
-        ? l10n.waitForTransferToFinish
-        : l10n.chooseAnotherFile;
-    final icon = isConnectionLost
-        ? Icons.link_off_rounded
-        : isSharingInProgress
-        ? Icons.hourglass_top_rounded
-        : Icons.file_present_rounded;
 
-    return Card(
-      margin: EdgeInsets.zero,
-      color: isConnectionLost
-          ? colorScheme.surfaceContainerHighest
-          : colorScheme.surfaceContainerHighest,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isConnectionLost
-              ? colorScheme.outlineVariant
-              : Colors.transparent,
-        ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: disabled
-            ? null
-            : () async {
-                final pickedFile = await FastFilePicker.pickFile();
-                if (pickedFile == null) {
-                  return;
-                }
-                _sendPickedFile(pickedFile);
-              },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-          child: Row(
-            spacing: 12,
-            children: [
-              AnimatedSwitcher(
-                duration: 180.ms,
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                child: Icon(
-                  icon,
-                  key: ValueKey(icon),
-                  color: isConnectionLost ? disabledColor : colorScheme.primary,
+    Widget action({
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: Card(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: colorScheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: isConnectionLost
+                  ? colorScheme.outlineVariant
+                  : Colors.transparent,
+            ),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: disabled ? null : onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 62),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
                 ),
-              ),
-              Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  spacing: 2,
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 4,
                   children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: isConnectionLost
-                            ? disabledColor
-                            : colorScheme.onSurface,
-                      ),
+                    Icon(
+                      icon,
+                      size: 22,
+                      color: disabled
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.primary,
                     ),
                     Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: isConnectionLost
-                            ? disabledColor
-                            : colorScheme.onSurfaceVariant,
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: disabled
+                            ? colorScheme.onSurfaceVariant
+                            : colorScheme.onSurface,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
-      ),
+      );
+    }
+
+    return Row(
+      children: [
+        action(
+          icon: Icons.content_paste_rounded,
+          label: l10n.clipboard,
+          onTap: _sendClipboard,
+        ),
+        const SizedBox(width: 8),
+        action(
+          icon: Icons.file_present_rounded,
+          label: l10n.file,
+          onTap: _pickFileToSend,
+        ),
+        const SizedBox(width: 8),
+        action(
+          icon: Icons.folder_open_rounded,
+          label: l10n.folder,
+          onTap: _sendFolder,
+        ),
+      ],
     );
   }
 
@@ -754,6 +755,86 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
 
     SocketService.instance.sendFile(fileLocation);
+  }
+
+  Future<void> _pickFileToSend() async {
+    final pickedFile = await FastFilePicker.pickFile();
+    if (pickedFile == null || !mounted) return;
+    _sendPickedFile(pickedFile);
+  }
+
+  /// 把粘贴板文本写成临时文件后按普通文件发送，接收端会写回粘贴板。
+  Future<void> _sendClipboard() async {
+    final l10n = AppLocalizations.of(context);
+    final file = await createClipboardTextFile();
+    if (!mounted) return;
+    if (file == null) {
+      showScaffoldSnackbar(l10n.clipboardEmpty);
+      return;
+    }
+    SocketService.instance.sendFile(
+      file.path,
+      displayName: l10n.clipboardFileName,
+      clipboard: true,
+    );
+  }
+
+  /// 选择文件夹并把其中所有文件逐个加入发送队列。
+  Future<void> _sendFolder() async {
+    final l10n = AppLocalizations.of(context);
+    try {
+      if (Platform.isAndroid) {
+        final pickedDirectory = await AndroidSafService.pickDirectory(
+          writePermission: false,
+        );
+        if (pickedDirectory == null) return;
+        final documents = await AndroidSafService.listFilesUnder(
+          pickedDirectory.uri,
+        );
+        if (!mounted) return;
+        if (documents.isEmpty) {
+          showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
+          return;
+        }
+        for (final document in documents) {
+          SocketService.instance.sendFile(document.uri);
+        }
+        return;
+      }
+
+      final pickedFolder = await FastFilePicker.pickFolder(
+        writePermission: false,
+      );
+      final folderPath = pickedFolder?.path;
+      if (folderPath == null || folderPath.isEmpty) return;
+      final directory = Directory(folderPath);
+      if (!await directory.exists()) {
+        if (mounted) {
+          showScaffoldSnackbar(l10n.folderNotFound);
+        }
+        return;
+      }
+
+      final paths = <String>[];
+      await for (final entity in directory.list(recursive: true)) {
+        if (entity is File) {
+          paths.add(entity.path);
+        }
+      }
+      if (paths.isEmpty) {
+        if (mounted) {
+          showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
+        }
+        return;
+      }
+      for (final path in paths) {
+        SocketService.instance.sendFile(path);
+      }
+    } catch (_) {
+      if (mounted) {
+        showScaffoldSnackbar(l10n.cannotReadFolder);
+      }
+    }
   }
 
   void _showConnectionIssueDialog({required String message}) {
@@ -852,6 +933,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           fileName: fileName ?? widget.fileName,
           fileSize: widget.fileSize,
           isReceived: widget.isReceived,
+          clipboard: widget.clipboard,
           uuid: widget.uuid,
           value: null,
           status: TransferStatus.completed,
@@ -931,6 +1013,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         fileSize: sizeConvert(fileSize.toDouble()),
         value: progress,
         isReceived: true,
+        clipboard: file['clipboard'] == true,
         uuid: uuid,
         status: TransferStatus.queued,
         canResume: true,
@@ -951,6 +1034,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
     required String fileSize,
     required String filePath,
     required bool isReceived,
+    bool clipboard = false,
     TransferStatus status = TransferStatus.inProgress,
   }) {
     _scrollToBottom();
@@ -988,6 +1072,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         fileSize: fileSize,
         value: progress,
         isReceived: isReceived,
+        clipboard: clipboard,
         uuid: uuid,
         status: hadPendingStatus ? pendingStatus : status,
         canResume: pendingCanResume,
@@ -1038,6 +1123,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       fileName: fileName ?? widget.fileName,
       fileSize: widget.fileSize,
       isReceived: widget.isReceived,
+      clipboard: widget.clipboard,
       uuid: widget.uuid,
       value: value,
       status: status,
