@@ -51,14 +51,28 @@ class AppLocalizations {
   String get notNow => isZh ? '暂时不要' : 'Not now';
   String get disable => isZh ? '关闭' : 'Disable';
 
-  // 后台运行权限门禁（不可关闭弹窗）
+  // 权限门禁（通知权限 / 电池优化）
   String get batteryOptimizationGateTitle => isZh
       ? '请先授予电池优化权限'
       : 'Grant battery optimization exemption first';
   String get backgroundRefreshGateTitle => isZh
       ? '请先开启后台 App 刷新'
       : 'Turn on Background App Refresh first';
+  String get batteryOptimizationGateMessage => isZh
+      ? '电池优化会限制后台运行，未放行时连接和传输会被系统中断。请在应用信息里把电池用量设为“无限制”。'
+      : 'Battery optimization restricts background work. Without an exemption, the system interrupts connections and transfers. Set battery usage to unrestricted in App info.';
+  String get backgroundRefreshGateMessage => isZh
+      ? '关闭后台 App 刷新时，应用转入后台会被系统挂起，连接和传输会中断。请在设置中为 Flashbyte 开启后台 App 刷新。'
+      : 'With Background App Refresh off, the system suspends the app in the background and interrupts connections and transfers. Turn it on for Flashbyte in Settings.';
   String get goToSettings => isZh ? '前往' : 'Go';
+  String get goToEnable => isZh ? '去开启' : 'Open settings';
+
+  // 通知权限引导
+  String get notificationPermissionTitle =>
+      isZh ? '需要通知权限' : 'Notifications needed';
+  String get notificationPermissionMessage => isZh
+      ? '传输进度和连接状态显示在常驻通知里；关闭通知后，通知栏不会出现这些信息。'
+      : 'Transfer progress and connection status are shown in a persistent notification. Without it, they stay hidden.';
 
   // 设置页 - 外观
   String get appearance => isZh ? '外观' : 'Appearance';
