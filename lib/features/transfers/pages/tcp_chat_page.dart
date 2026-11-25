@@ -624,11 +624,23 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  /// 分享页底部的三个发送入口：粘贴板 / 文件 / 文件夹。
+  /// 空闲时显示三个发送入口；传输中或连接断开时显示一个不可点击的状态按键。
   Widget _buildTransferActions({required bool isConnectionLost}) {
     final l10n = AppLocalizations.of(context);
+    if (isConnectionLost || isSharingInProgress) {
+      return _buildTransferStatusButton(
+        icon: isConnectionLost
+            ? Icons.link_off_rounded
+            : Icons.hourglass_top_rounded,
+        title: isConnectionLost ? l10n.connectionLost : l10n.transferInProgress,
+        subtitle: isConnectionLost
+            ? l10n.reconnectToSendMore
+            : l10n.waitForTransferToFinish,
+        disconnected: isConnectionLost,
+      );
+    }
+
     final colorScheme = Theme.of(context).colorScheme;
-    final disabled = isConnectionLost || isSharingInProgress;
 
     Widget action({
       required IconData icon,
@@ -642,15 +654,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
           color: colorScheme.surfaceContainerHighest,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: BorderSide(
-              color: isConnectionLost
-                  ? colorScheme.outlineVariant
-                  : Colors.transparent,
-            ),
           ),
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
-            onTap: disabled ? null : onTap,
+            onTap: onTap,
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 62),
               child: Padding(
@@ -662,21 +669,13 @@ class _TcpChatPageState extends State<TcpChatPage> {
                   mainAxisSize: MainAxisSize.min,
                   spacing: 4,
                   children: [
-                    Icon(
-                      icon,
-                      size: 22,
-                      color: disabled
-                          ? colorScheme.onSurfaceVariant
-                          : colorScheme.primary,
-                    ),
+                    Icon(icon, size: 22, color: colorScheme.primary),
                     Text(
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: disabled
-                            ? colorScheme.onSurfaceVariant
-                            : colorScheme.onSurface,
+                        color: colorScheme.onSurface,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -709,6 +708,63 @@ class _TcpChatPageState extends State<TcpChatPage> {
           onTap: _sendFolder,
         ),
       ],
+    );
+  }
+
+  /// 传输中或连接断开时替代三个入口的状态按键，不可点击。
+  Widget _buildTransferStatusButton({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool disconnected,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: disconnected ? colorScheme.outlineVariant : Colors.transparent,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+        child: Row(
+          spacing: 12,
+          children: [
+            Icon(
+              icon,
+              color: disconnected
+                  ? colorScheme.onSurfaceVariant
+                  : colorScheme.primary,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 2,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: disconnected
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
