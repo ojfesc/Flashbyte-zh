@@ -95,7 +95,10 @@ class AppSettings {
       return savedName;
     }
 
-    return generateDeviceName();
+    // 没有自定义名称时使用本机名称（设备型号），不再自动生成随机名称。
+    final modelName = await getDeviceModelName();
+    await setDeviceName(modelName);
+    return modelName;
   }
 
   static Future<String> generateDeviceName() async {
