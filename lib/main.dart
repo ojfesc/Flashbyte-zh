@@ -205,20 +205,7 @@ class _StartupEffectsState extends State<StartupEffects> {
       unawaited(AndroidConnectionNotificationService.instance.initialize());
       unawaited(TrustedDevicesService.instance.load());
       unawaited(IncomingShareService.instance.init());
-      unawaited(_requestNotificationPermissionIfNeeded());
     });
-  }
-
-  Future<void> _requestNotificationPermissionIfNeeded() async {
-    if (!mounted) return;
-    try {
-      final allowed = await AwesomeNotifications().isNotificationAllowed();
-      if (!allowed) {
-        await AwesomeNotifications().requestPermissionToSendNotifications();
-      }
-    } catch (_) {
-      // 此平台不支持通知
-    }
   }
 
   @override
