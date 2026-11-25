@@ -55,6 +55,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   static const double _receiverVisualMinHeight = 280;
 
   final TextEditingController _deviceNameController = TextEditingController();
+  final FocusNode _deviceNameFocusNode = FocusNode();
+
+  // 名称输入框是否正在编辑；编辑时右侧按钮显示为保存（勾）。
+  bool _isEditingDeviceName = false;
   final AppMotionController _motionController = AppMotionController.instance;
   final Map<String, AnimationController> _deviceShakeControllers = {};
   List<FastFilePickerPath> selectedFiles = [];
@@ -91,7 +95,6 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   StreamSubscription<List<DiscoveredDevice>>? _discoverySubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<List<FastFilePickerPath>>? _sharedFilesSubscription;
-  Timer? _nameSaveDebounce;
   Timer? _networkRefreshTimer;
   int _serverRestartGeneration = 0;
   bool _receiveServerIntentionallyStopped = false;
@@ -109,6 +112,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       initialIndex: widget.initialTabIndex,
     );
     _tabController.addListener(_handleTabChanged);
+    _deviceNameFocusNode.addListener(_handleDeviceNameFocusChanged);
     _sharedFilesSubscription = IncomingShareService.instance.sharedFilesStream
         .listen(_appendSharedFiles);
     _discoveryRefreshController = AnimationController(
@@ -155,8 +159,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     _discoverySubscription?.cancel();
     _connectivitySubscription?.cancel();
     _sharedFilesSubscription?.cancel();
-    _nameSaveDebounce?.cancel();
     _networkRefreshTimer?.cancel();
+    _deviceNameFocusNode.removeListener(_handleDeviceNameFocusChanged);
+    _deviceNameFocusNode.dispose();
     _deviceNameController.dispose();
     if (!_exitNotificationSent) {
       unawaited(_notifyFileSelectionExit());
@@ -708,21 +713,23 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     );
   }
 
-  void _scheduleDeviceNameSave(String value) {
-    if (value.isNotEmpty) {
-      setState(() {
-        deviceName = value;
-      });
+  /// 把输入框里的名称保存到设置并刷新广播；空名称恢复为当前名称。
+  Future<void> _persistDeviceNameDraft() async {
+    final name = _deviceNameController.text.trim();
+    if (name.isEmpty) {
+      _deviceNameController.text = deviceName ?? '';
+      return;
     }
-    _nameSaveDebounce?.cancel();
-    _nameSaveDebounce = Timer(
-      const Duration(milliseconds: 400),
-      _saveDeviceName,
-    );
+    if (name == deviceName) {
+      if (_deviceNameController.text != name) {
+        _deviceNameController.text = name;
+      }
+      return;
+    }
+    await _saveDeviceName();
   }
 
   Future<void> _saveDeviceName() async {
-    _nameSaveDebounce?.cancel();
     final name = _deviceNameController.text.trim();
     if (name.isEmpty) {
       return;
@@ -740,8 +747,26 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     DeviceDiscoveryService.instance.requestRefresh();
   }
 
+  void _handleDeviceNameFocusChanged() {
+    final focused = _deviceNameFocusNode.hasFocus;
+    if (focused == _isEditingDeviceName) return;
+    setState(() {
+      _isEditingDeviceName = focused;
+    });
+    if (!focused) {
+      // 离开输入框时提交草稿，避免未点勾的修改丢失。
+      unawaited(_persistDeviceNameDraft());
+    }
+  }
+
+  /// 保存当前名称并结束编辑；按钮随后按是否为自定义名称恢复为重置或隐藏。
+  Future<void> _commitDeviceName() async {
+    await _persistDeviceNameDraft();
+    if (!mounted) return;
+    _deviceNameFocusNode.unfocus();
+  }
+
   Future<void> _resetDeviceName() async {
-    _nameSaveDebounce?.cancel();
     final modelName =
         _deviceModelName ?? await AppSettings.getDeviceModelName();
     await AppSettings.setDeviceName(modelName);
@@ -1191,19 +1216,23 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ),
           ],
         ),
-        body: SafeArea(
-          child: useWideLayout
-              ? _buildWideLayout()
-              : ColoredBox(
-                  color: colorScheme.surfaceContainerLowest,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildTabPage(_buildSendTab()),
-                      _buildTabPage(_buildReceiveTab()),
-                    ],
+        body: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          child: SafeArea(
+            child: useWideLayout
+                ? _buildWideLayout()
+                : ColoredBox(
+                    color: colorScheme.surfaceContainerLowest,
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        _buildTabPage(_buildSendTab()),
+                        _buildTabPage(_buildReceiveTab()),
+                      ],
+                    ),
                   ),
-                ),
+          ),
         ),
         bottomNavigationBar: useWideLayout
             ? null
@@ -2032,11 +2061,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                   ),
                   TextField(
                     controller: _deviceNameController,
+                    focusNode: _deviceNameFocusNode,
                     enabled: deviceName != null && !_settingsLocked,
-                    onChanged: _scheduleDeviceNameSave,
-                    onSubmitted: (_) => _saveDeviceName(),
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
+                    onSubmitted: (_) => _commitDeviceName(),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer,
                     ),
@@ -2058,14 +2085,28 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 ],
               ),
             ),
-            if (_isCustomDeviceName())
-              IconButton(
-                tooltip: l10n.resetToDeviceName,
-                onPressed: _settingsLocked ? null : _resetDeviceName,
-                icon: const Icon(Icons.restart_alt_rounded),
-                color: colorScheme.onPrimaryContainer,
-                style: IconButton.styleFrom(
-                  minimumSize: const Size.square(44),
+            if (_isEditingDeviceName)
+              ExcludeFocus(
+                child: IconButton(
+                  tooltip: l10n.save,
+                  onPressed: _settingsLocked ? null : _commitDeviceName,
+                  icon: const Icon(Icons.check_rounded),
+                  color: colorScheme.onPrimaryContainer,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(44),
+                  ),
+                ),
+              )
+            else if (_isCustomDeviceName())
+              ExcludeFocus(
+                child: IconButton(
+                  tooltip: l10n.resetToDeviceName,
+                  onPressed: _settingsLocked ? null : _resetDeviceName,
+                  icon: const Icon(Icons.restart_alt_rounded),
+                  color: colorScheme.onPrimaryContainer,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(44),
+                  ),
                 ),
               ),
           ],
