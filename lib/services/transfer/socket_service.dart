@@ -263,7 +263,13 @@ class SocketService {
     }
   }
 
-  void sendFile(String filePath) {
+  /// 发送单个文件。[clipboard] 为 true 时接收端不落盘，而是把内容写进粘贴板。
+  /// [displayName] 覆盖传输中显示的文件名，粘贴板文本用它显示可读名称。
+  void sendFile(
+    String filePath, {
+    String? displayName,
+    bool clipboard = false,
+  }) {
     if (_toIsolateSendPort == null) {
       return;
     }
@@ -271,6 +277,8 @@ class SocketService {
     _toIsolateSendPort!.send({
       'command': 'send_file',
       'filePath': filePath,
+      if (displayName != null) 'displayName': displayName,
+      'clipboard': clipboard,
     });
   }
 
