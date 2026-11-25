@@ -168,6 +168,8 @@ class AndroidConnectionNotificationService {
 
   /// 通知栏的取消键按整批处理：取消所有仍在传的文件。
   void _cancelAllTransfers() {
+    // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
+    SocketService.instance.cancelQueuedSends();
     final fileIds = _activeTransferIds();
     _activeBatchIds.clear();
     if (fileIds.isEmpty) {
