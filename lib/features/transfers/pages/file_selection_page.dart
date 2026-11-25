@@ -2249,7 +2249,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                           children: [
                             Icon(
                               selectedFiles.isEmpty
-                                  ? Icons.attach_file_rounded
+                                  ? Icons.file_present_rounded
                                   : Icons.swap_horiz_rounded,
                               color: selectedFiles.isEmpty
                                   ? colorScheme.onPrimaryContainer
