@@ -346,7 +346,8 @@ void fileReceiverIsolate(List<Object> args) {
               });
             }
           }
-        } else if (command['command'] == 'send_file') {
+        } else if (command['command'] == 'send_file' ||
+            command['command'] == 'send_file_separate') {
           if (localDisconnectRequested) {
             continue;
           }
@@ -360,9 +361,12 @@ void fileReceiverIsolate(List<Object> args) {
           }
 
           final batch = <Map<String, dynamic>>[command];
-          while (commandQueue.isNotEmpty &&
-              commandQueue.first['command'] == 'send_file') {
-            batch.add(commandQueue.removeFirst());
+          // 只有普通的 send_file 才合并成批量请求；send_file_separate 每个文件单独请求。
+          if (command['command'] == 'send_file') {
+            while (commandQueue.isNotEmpty &&
+                commandQueue.first['command'] == 'send_file') {
+              batch.add(commandQueue.removeFirst());
+            }
           }
 
           try {
@@ -634,6 +638,30 @@ void fileReceiverIsolate(List<Object> args) {
         commandQueue.add({'command': 'send_file', 'filePath': path as String});
       }
       processCommandQueue();
+      return;
+    } else if (command['command'] == 'send_files_separately') {
+      // 逐个发送：每个文件都作为独立的单文件请求排队，不合并成批量请求。
+      final filePaths = command['filePaths'] as List<dynamic>;
+      for (final path in filePaths) {
+        commandQueue.add({
+          'command': 'send_file_separate',
+          'filePath': path as String,
+        });
+      }
+      processCommandQueue();
+      return;
+    } else if (command['command'] == 'cancel_queued_sends') {
+      // 取消还没开始发送的排队文件；正在传的文件由 cancel_transfer 处理。
+      final kept = commandQueue
+          .where(
+            (queued) =>
+                queued['command'] != 'send_file' &&
+                queued['command'] != 'send_file_separate',
+          )
+          .toList();
+      commandQueue
+        ..clear()
+        ..addAll(kept);
       return;
     }
     commandQueue.add(command);
