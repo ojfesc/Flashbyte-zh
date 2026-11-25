@@ -26,6 +26,7 @@ class AppLocalizations {
   String get languageEnglish => isZh ? '英文' : 'English';
   String get dismiss => isZh ? '关闭' : 'Dismiss';
   String get cancel => isZh ? '取消' : 'Cancel';
+  String get save => isZh ? '保存' : 'Save';
   String get backToFileSelection =>
       isZh ? '返回文件选择' : 'Back to file selection';
   String get unknownDevice => isZh ? '未知设备' : 'Unknown device';
