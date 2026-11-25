@@ -940,20 +940,6 @@ class _TcpChatPageState extends State<TcpChatPage> {
     isDisconnected.value = true;
   }
 
-  void _scrollToBottom() {
-    if (scrollController.hasClients) {
-      Future.delayed(500.ms).then(
-        (value) {
-          scrollController.animateTo(
-            scrollController.position.minScrollExtent,
-            duration: const Duration(milliseconds: 1000),
-            curve: Curves.easeOutCirc,
-          );
-        },
-      );
-    }
-  }
-
   void replaceTransferWidget({
     required String? uuid,
     String? filePath,
@@ -1076,7 +1062,6 @@ class _TcpChatPageState extends State<TcpChatPage> {
     bool clipboard = false,
     TransferStatus status = TransferStatus.inProgress,
   }) {
-    _scrollToBottom();
     if (_fileTransferWidgets.value.any((widget) => widget.uuid == uuid)) {
       _fileTransferWidgets.value = [
         for (final widget in _fileTransferWidgets.value)
@@ -1202,6 +1187,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
       return;
     }
     if (!_leavingPage && isSharingInProgress) {
+      // 传输中被主动断开：日志用来区分“有人调用了断开”和“心跳/写失败”。
+      debugPrint('[SESSION] disconnect while transferring');
       _reportSessionIssue();
     } else if (!_leavingPage) {
       Navigator.pop(context);
