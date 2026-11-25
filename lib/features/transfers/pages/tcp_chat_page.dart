@@ -73,9 +73,18 @@ class _TcpChatPageState extends State<TcpChatPage> {
             );
             return;
           }
+          final locations = <String>[];
           for (final file in batch) {
-            _sendPickedFile(file);
+            final location = _pickedFileLocation(file);
+            if (location != null) locations.add(location);
           }
+          if (locations.isEmpty) {
+            showScaffoldSnackbar(
+              AppLocalizations.of(context).couldNotReadSelectedFile,
+            );
+            return;
+          }
+          SocketService.instance.sendFilesSeparately(locations);
           final l10n = AppLocalizations.of(context);
           final peerName = _peerName(context);
           showScaffoldSnackbar(
@@ -768,7 +777,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         action(
           icon: Icons.file_present_rounded,
           label: l10n.file,
-          onTap: _pickFileToSend,
+          onTap: _pickFilesToSend,
         ),
         const SizedBox(width: 8),
         action(
@@ -855,9 +864,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
 
     _sentInitialFiles = true;
+    final locations = <String>[];
     for (final file in widget.initialFiles) {
-      _sendPickedFile(file);
+      final location = _pickedFileLocation(file);
+      if (location != null) locations.add(location);
     }
+    SocketService.instance.sendFilesSeparately(locations);
   }
 
   String _peerName(BuildContext context) {
@@ -867,25 +879,30 @@ class _TcpChatPageState extends State<TcpChatPage> {
         : name;
   }
 
-  void _sendPickedFile(FastFilePickerPath pickedFile) {
-    final fileLocation = Platform.isAndroid && pickedFile.uri != null
+  /// 选择器返回的路径转换成传输层可用的位置：Android 用 SAF 的 content://，其余用文件路径。
+  String? _pickedFileLocation(FastFilePickerPath pickedFile) {
+    return Platform.isAndroid && pickedFile.uri != null
         ? pickedFile.uri
         : pickedFile.path;
+  }
 
-    if (fileLocation == null) {
+  /// 多选文件后逐个排队发送；每个文件都是独立的单文件请求。
+  Future<void> _pickFilesToSend() async {
+    final pickedFiles = await FastFilePicker.pickMultipleFiles();
+    if (!mounted || pickedFiles == null || pickedFiles.isEmpty) return;
+
+    final locations = <String>[];
+    for (final pickedFile in pickedFiles) {
+      final location = _pickedFileLocation(pickedFile);
+      if (location != null) locations.add(location);
+    }
+    if (locations.isEmpty) {
       showScaffoldSnackbar(
         AppLocalizations.of(context).couldNotReadSelectedFile,
       );
       return;
     }
-
-    SocketService.instance.sendFile(fileLocation);
-  }
-
-  Future<void> _pickFileToSend() async {
-    final pickedFile = await FastFilePicker.pickFile();
-    if (pickedFile == null || !mounted) return;
-    _sendPickedFile(pickedFile);
+    SocketService.instance.sendFilesSeparately(locations);
   }
 
   /// 把粘贴板文本写成临时文件后按普通文件发送，接收端会写回粘贴板。
@@ -921,9 +938,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
           showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
           return;
         }
-        for (final document in documents) {
-          SocketService.instance.sendFile(document.uri);
-        }
+        SocketService.instance.sendFilesSeparately([
+          for (final document in documents) document.uri,
+        ]);
         return;
       }
 
@@ -952,9 +969,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         }
         return;
       }
-      for (final path in paths) {
-        SocketService.instance.sendFile(path);
-      }
+      SocketService.instance.sendFilesSeparately(paths);
     } catch (_) {
       if (mounted) {
         showScaffoldSnackbar(l10n.cannotReadFolder);
@@ -1264,6 +1279,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 取消所有尚未结束的传输；发送方向按用户取消处理，避免被当成连接异常。
   void _cancelAllTransfers() {
+    // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
+    SocketService.instance.cancelQueuedSends();
     for (final widget in _fileTransferWidgets.value) {
       if (widget.status == TransferStatus.completed ||
           widget.status == TransferStatus.cancelled) {
