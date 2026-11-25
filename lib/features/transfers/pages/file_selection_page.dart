@@ -245,6 +245,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       }
     });
     if (previousNetworkMode != null && previousNetworkMode != nextNetworkMode) {
+      // 网络模式变化会结束当前会话，日志用来核对传输中断的时间点。
+      debugPrint('[NET] ${previousNetworkMode.name} -> ${nextNetworkMode.name}');
       if (nextNetworkMode == _ServerNetworkMode.offline) {
         unawaited(_stopReceiveServerForNetworkLoss());
       } else if (_shouldReconnectServerFor(nextNetworkMode)) {
