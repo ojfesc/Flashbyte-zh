@@ -653,6 +653,8 @@ Future<String?> _sendFileCommand(
   Future<void> Function(String fileId)? onPaused,
 }) async {
   final filePath = command['filePath'] as String;
+  final displayName = command['displayName'] as String?;
+  final clipboard = command['clipboard'] == true;
   File? fileToSend;
   Map<String, dynamic>? fileHeader;
 
@@ -671,7 +673,7 @@ Future<String?> _sendFileCommand(
 
       fileHeader = {
         'uuid': Uuid().v4(),
-        'name': core.displayFileName(source.fileName),
+        'name': displayName ?? core.displayFileName(source.fileName),
         'size': source.fileSize,
       };
     } else {
@@ -680,7 +682,7 @@ Future<String?> _sendFileCommand(
 
       fileHeader = {
         'uuid': Uuid().v4(),
-        'name': core.displayFileName(filePath),
+        'name': displayName ?? core.displayFileName(filePath),
         'size': fileStats.size,
       };
     }
@@ -690,6 +692,7 @@ Future<String?> _sendFileCommand(
       'uuid': fileHeader['uuid'],
       'name': fileHeader['name'],
       'size': fileHeader['size'],
+      if (clipboard) 'clipboard': true,
     });
 
     toUiSendPort.send({
@@ -698,6 +701,7 @@ Future<String?> _sendFileCommand(
       'fileName': fileHeader['name'],
       'fileSize': fileHeader['size'],
       'filePath': command['filePath'],
+      'clipboard': clipboard,
       'pendingAcceptance': true,
     });
 
@@ -720,6 +724,7 @@ Future<String?> _sendFileCommand(
       'fileName': fileHeader['name'],
       'fileSize': fileHeader['size'],
       'filePath': command['filePath'],
+      'clipboard': clipboard,
       'pendingAcceptance': false,
     });
 
@@ -728,6 +733,7 @@ Future<String?> _sendFileCommand(
       'uuid': fileHeader['uuid'],
       'name': fileHeader['name'],
       'size': fileHeader['size'],
+      if (clipboard) 'clipboard': true,
     });
     fileStarted = true;
 
@@ -1217,7 +1223,10 @@ void _handleSocketConnection(
       return;
     }
 
-    await target.closeWriter();
+    // 粘贴板内容只在传输完整时写回，丢弃半截内容时不能触发 closeWriter。
+    if (activeFileHeader?['clipboard'] != true) {
+      await target.closeWriter();
+    }
     await target.deleteFile();
 
     activeOutputTarget = null;
@@ -1227,7 +1236,9 @@ void _handleSocketConnection(
   Future<void> discardActiveOutputForCancel() async {
     final target = activeOutputTarget;
     if (target != null) {
-      await target.closeWriter();
+      if (activeFileHeader?['clipboard'] != true) {
+        await target.closeWriter();
+      }
       await target.deleteFile();
     }
 
@@ -1421,6 +1432,7 @@ void _handleSocketConnection(
             'filePath': '',
             'fileSize': fileSize,
             'pendingAcceptance': true,
+            'clipboard': headerJson['clipboard'] == true,
           });
         }
         return true;
@@ -1507,36 +1519,58 @@ void _handleSocketConnection(
     return false;
   }
 
+  /// 粘贴板接收目标：内容只留在内存里，关闭时写回系统粘贴板，不生成磁盘文件。
+  core.OutputTarget _createClipboardOutputTarget({required String fileName}) {
+    final bytes = <int>[];
+    return core.OutputTarget.custom(
+      fileName: fileName,
+      filePath: '',
+      writeChunk: (chunk) => bytes.addAll(chunk),
+      closeWriter: () async {
+        final text = utf8.decode(bytes, allowMalformed: true);
+        await Clipboard.setData(ClipboardData(text: text));
+      },
+      deleteFile: () async {},
+    );
+  }
+
   Future<void> beginFileFrame(
     Map<String, dynamic> headerJson,
     int fileSize, {
     required bool chunked,
   }) async {
     final fileName = headerJson['name'] as String;
+    final isClipboard = headerJson['clipboard'] == true;
     core.OutputTarget? fileTarget;
-    try {
-      fileTarget = await _createOutputTarget(
-        configuredDownloadDirectory: getDownloadDirectory?.call(),
-        originalFileName: core.displayFileName(fileName),
-        onWriteError: (e) {
-          connectionErrorSent = true;
-          toUiSendPort.send({
-            'status': 'error',
-            'fatal': 'true',
-            'message': 'Could not save received file: ${e.toString()}',
-          });
-          closeSocket();
-        },
+    if (isClipboard) {
+      fileTarget = _createClipboardOutputTarget(
+        fileName: core.displayFileName(fileName),
       );
-    } catch (e) {
-      connectionErrorSent = true;
-      toUiSendPort.send({
-        'status': 'error',
-        'fatal': 'true',
-        'message': 'Could not prepare file for download: ${e.toString()}',
-      });
-      closeSocket();
-      return;
+    } else {
+      try {
+        fileTarget = await _createOutputTarget(
+          configuredDownloadDirectory: getDownloadDirectory?.call(),
+          originalFileName: core.displayFileName(fileName),
+          onWriteError: (e) {
+            connectionErrorSent = true;
+            toUiSendPort.send({
+              'status': 'error',
+              'fatal': 'true',
+              'message': 'Could not save received file: ${e.toString()}',
+            });
+            closeSocket();
+          },
+        );
+      } catch (e) {
+        connectionErrorSent = true;
+        toUiSendPort.send({
+          'status': 'error',
+          'fatal': 'true',
+          'message': 'Could not prepare file for download: ${e.toString()}',
+        });
+        closeSocket();
+        return;
+      }
     }
     activeOutputTarget = fileTarget;
     activeFileHeader = headerJson;
@@ -1554,6 +1588,7 @@ void _handleSocketConnection(
       'fileName': fileTarget.fileName,
       'filePath': fileTarget.filePath,
       'fileSize': fileSize,
+      'clipboard': isClipboard,
     });
   }
 
@@ -1577,7 +1612,9 @@ void _handleSocketConnection(
       toUiSendPort.send({
         'status': 'error',
         'fatal': 'true',
-        'message': 'Could not save received file: ${e.toString()}',
+        'message': header['clipboard'] == true
+            ? 'Could not write the clipboard text: ${e.toString()}'
+            : 'Could not save received file: ${e.toString()}',
       });
       stopwatch.stop();
       activeOutputTarget = null;
@@ -1592,6 +1629,7 @@ void _handleSocketConnection(
       'timeTaken': timeTaken,
       'fileName': target.fileName,
       'filePath': target.filePath,
+      'clipboard': header['clipboard'] == true,
     });
 
     stopwatch.stop();
