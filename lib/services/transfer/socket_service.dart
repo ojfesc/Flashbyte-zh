@@ -521,6 +521,33 @@ class SocketService {
     }
   }
 
+  /// 记录一次文件请求的开始状态，供批准页在构建时查询请求是否已被处理。
+  ///
+  /// 批量请求的 start 没有顶层 fileId，文件 id 在 files 列表里；按列表里的每个
+  /// id 分别记录，批量请求才能和单个文件一样按 id 查到请求状态。
+  void _recordOfferStart(IsolateMessage message, {required String? fileId}) {
+    final startMessage = Map<String, dynamic>.from(message);
+    final fileIds = <String>{};
+
+    if (fileId != null) {
+      fileIds.add(fileId);
+    } else {
+      final files = message['files'];
+      if (files is List) {
+        for (final file in files) {
+          if (file is Map && file['fileId'] is String) {
+            fileIds.add(file['fileId'] as String);
+          }
+        }
+      }
+    }
+
+    for (final id in fileIds) {
+      _transferStartMessages[id] = startMessage;
+      _transferLatestMessages.remove(id);
+    }
+  }
+
   void _publishMessage(IsolateMessage message) {
     final status = message['status'] ?? message['command'];
     if (status == 'offer_cancelled_by_sender') {
@@ -536,22 +563,20 @@ class SocketService {
       );
     }
     final fileId = message['fileId'] as String?;
-    if (fileId != null) {
-      if (status == 'start' || status == 'send_start') {
-        _transferStartMessages[fileId] = Map<String, dynamic>.from(message);
-        _transferLatestMessages.remove(fileId);
-      } else if (status == 'progress' ||
-          status == 'send_progress' ||
-          status == 'completed' ||
-          status == 'send_complete' ||
-          status == 'transfer_paused' ||
-          status == 'transfer_resumed' ||
-          status == 'transfer_pending' ||
-          status == 'transfer_accepted' ||
-          status == 'transfer_declined' ||
-          status == 'transfer_cancelled') {
-        _transferLatestMessages[fileId] = Map<String, dynamic>.from(message);
-      }
+    if (status == 'start' || status == 'send_start') {
+      _recordOfferStart(message, fileId: fileId);
+    } else if (fileId != null &&
+        (status == 'progress' ||
+            status == 'send_progress' ||
+            status == 'completed' ||
+            status == 'send_complete' ||
+            status == 'transfer_paused' ||
+            status == 'transfer_resumed' ||
+            status == 'transfer_pending' ||
+            status == 'transfer_accepted' ||
+            status == 'transfer_declined' ||
+            status == 'transfer_cancelled')) {
+      _transferLatestMessages[fileId] = Map<String, dynamic>.from(message);
     }
 
     _messageStreamController.add(message);
