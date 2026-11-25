@@ -30,11 +30,11 @@ Flashbyte 使用纯 TCP socket 在隔离区（isolate，即隔离的内存通道
 <!-- BEGIN AUTO RELEASE DOWNLOADS -->
 | 平台 | 下载 |
 |----------|----------|
-| Android | [APK](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-android.apk) \| [AAB](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-android.aab) |
-| Linux | [TAR](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-linux-x64.tar.gz) |
-| macOS | [DMG](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-macos.dmg) |
-| iOS | [APP](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-ios-unsigned-runner-app.zip) |
-| Windows | [EXE](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-windows-setup-x64.exe) \| [ZIP](https://github.com/ojfesc/Flashbyte-zh/releases/download/v3.1.4/flashbyte-windows-x64.zip) |
+| Android | [APK](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-android.apk) \| [AAB](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-android.aab) |
+| Linux | [TAR](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-linux-x64.tar.gz) |
+| macOS | [DMG](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-macos.dmg) |
+| iOS | [APP](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-ios-unsigned-runner-app.zip) |
+| Windows | [EXE](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-windows-setup-x64.exe) \| [ZIP](https://github.com/ojfesc7964/Flashbyte-zh/releases/download/v3.1.4/flashbyte-windows-x64.zip) |
 <!-- END AUTO RELEASE DOWNLOADS -->
 
 ### 目录
