@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte_core/flashbyte_core.dart' as core;
@@ -13,6 +15,17 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:saf/saf.dart';
 import 'package:uuid/uuid.dart';
+
+// Top-level maps live in the isolate's own global scope. They are shared by
+// the receive handler and the send command without threading another couple of
+// callbacks through every socket connection.
+final _sendingFileSizes = <String, int>{};
+final _resumeOffsets = <String, int>{};
+
+/// Serializes partial-file cleanup with a reconnect that may reopen the same
+/// partial file. Without this, a new connection could append while the old
+/// receiver handler is still closing its sink.
+Future<void> _pendingReceiveCleanup = Future<void>.value();
 
 void fileReceiverIsolate(List<Object> args) {
   final toUiSendPort = args[0] as SendPort;
@@ -39,6 +52,9 @@ void fileReceiverIsolate(List<Object> args) {
   final remotelyCancelledTransfers = <String>{};
   final acceptedTransfers = <String>{};
   final declinedTransfers = <String>{};
+  // Offset reported by the peer for a resumed file, keyed by the current file
+  // id. Cleared once the file has been started.
+  final remoteResumeOffsets = <String, int>{};
 
   bool isTransferPaused(String fileId) {
     return locallyPausedTransfers.containsKey(fileId) ||
@@ -171,6 +187,12 @@ void fileReceiverIsolate(List<Object> args) {
 
             serverSocket!.listen(
               (socket) {
+                // Only one transfer socket is meaningful at a time. Close a
+                // half-open previous client so its cleanup can run before the
+                // resumed file reopens the partial output.
+                try {
+                  clientSocket?.destroy();
+                } catch (_) {}
                 savedClientSocket = socket;
                 core.configureSocketForTransfer(savedClientSocket);
                 clientSocket = socket;
@@ -196,6 +218,9 @@ void fileReceiverIsolate(List<Object> args) {
                   onRemoteTransferResumed: handleRemoteTransferResumed,
                   onRemoteTransferCancelled: handleRemoteTransferCancelled,
                   onRemoteTransferAccepted: handleRemoteTransferAccepted,
+                  onRemoteTransferOffset: (fileId, offset) {
+                    remoteResumeOffsets[fileId] = offset;
+                  },
                   onRemoteTransferDeclined: handleRemoteTransferDeclined,
                 );
               },
@@ -285,6 +310,9 @@ void fileReceiverIsolate(List<Object> args) {
                   onRemoteTransferResumed: handleRemoteTransferResumed,
                   onRemoteTransferCancelled: handleRemoteTransferCancelled,
                   onRemoteTransferAccepted: handleRemoteTransferAccepted,
+                  onRemoteTransferOffset: (fileId, offset) {
+                    remoteResumeOffsets[fileId] = offset;
+                  },
                   onRemoteTransferDeclined: handleRemoteTransferDeclined,
                   onTransferAcknowledged: (fileId) {
                     if (sendingFileId == fileId) {
@@ -325,6 +353,9 @@ void fileReceiverIsolate(List<Object> args) {
                   onRemoteTransferResumed: handleRemoteTransferResumed,
                   onRemoteTransferCancelled: handleRemoteTransferCancelled,
                   onRemoteTransferAccepted: handleRemoteTransferAccepted,
+                  onRemoteTransferOffset: (fileId, offset) {
+                    remoteResumeOffsets[fileId] = offset;
+                  },
                   onRemoteTransferDeclined: handleRemoteTransferDeclined,
                   onTransferAcknowledged: (fileId) {
                     if (sendingFileId == fileId) {
@@ -385,6 +416,8 @@ void fileReceiverIsolate(List<Object> args) {
                     acceptedTransfers.contains(fileId),
                 shouldDeclineTransfer: (fileId) =>
                     declinedTransfers.contains(fileId),
+                resumeOffsetFor: (fileId) =>
+                    remoteResumeOffsets[fileId] ?? 0,
                 onPaused: (fileId) async {
                   final role = locallyPausedTransfers[fileId];
                   if (role == null) {
@@ -507,21 +540,14 @@ void fileReceiverIsolate(List<Object> args) {
         } else if (command['command'] == "disconnect") {
           final wasSendingFile = isSendingFile;
           localDisconnectRequested = true;
-          final header = utf8.encode(
-            jsonEncode({
-              'type': 'disconnect',
-              'reason': wasSendingFile ? 'transfer_cancelled' : 'user_left',
-            }),
-          );
-          final byteData = ByteData(8);
-          byteData.setUint32(0, header.length);
-          byteData.setUint32(4, 0);
-
           try {
             if (clientSocket != null) {
-              clientSocket!.add(byteData.buffer.asUint8List());
-              clientSocket!.add(header);
-              await clientSocket!.flush();
+              await core.sendControlFrame(clientSocket, {
+                'type': 'disconnect',
+                'reason': wasSendingFile
+                    ? 'transfer_cancelled'
+                    : 'user_left',
+              });
             }
           } catch (_) {}
           try {
@@ -550,6 +576,7 @@ void fileReceiverIsolate(List<Object> args) {
 
   fromUiReceivePort.listen((message) async {
     final command = message as Map<String, dynamic>;
+    try {
     if (command['command'] == 'disconnect') {
       localDisconnectRequested = true;
       if (isSendingFile) {
@@ -603,6 +630,7 @@ void fileReceiverIsolate(List<Object> args) {
         await core.sendSocketFrame(clientSocket, {
           'type': 'file_transfer_accept',
           'fileId': fileId,
+          'offset': _resumeOffsets[fileId] ?? 0,
         });
         toUiSendPort.send({'status': 'transfer_accepted', 'fileId': fileId});
         return;
@@ -666,6 +694,15 @@ void fileReceiverIsolate(List<Object> args) {
     }
     commandQueue.add(command);
     processCommandQueue();
+    } catch (e) {
+      if (!localDisconnectRequested) {
+        toUiSendPort.send({
+          'status': 'error',
+          'fatal': 'false',
+          'message': 'Command processing error: ${e.toString()}',
+        });
+      }
+    }
   });
 }
 
@@ -678,6 +715,7 @@ Future<String?> _sendFileCommand(
   required bool Function(String fileId) shouldCancelTransfer,
   required bool Function(String fileId) shouldAcceptTransfer,
   required bool Function(String fileId) shouldDeclineTransfer,
+  required int Function(String fileId) resumeOffsetFor,
   Future<void> Function(String fileId)? onPaused,
 }) async {
   final filePath = command['filePath'] as String;
@@ -717,25 +755,33 @@ Future<String?> _sendFileCommand(
       };
     }
 
+    final fileId = fileHeader['uuid'] as String;
+    final fileName = fileHeader['name'] as String;
+    final fileSize = fileHeader['size'] as int;
+    _sendingFileSizes[fileId] = fileSize;
+    final resumeKey = sha1
+        .convert(utf8.encode('$filePath|$fileName|$fileSize'))
+        .toString();
+
     await core.sendSocketFrame(clientSocket, {
       'type': 'file_offer',
-      'uuid': fileHeader['uuid'],
-      'name': fileHeader['name'],
-      'size': fileHeader['size'],
+      'uuid': fileId,
+      'name': fileName,
+      'size': fileSize,
+      'resumeKey': resumeKey,
       if (clipboard) 'clipboard': true,
     });
 
     toUiSendPort.send({
       'status': 'send_start',
-      'fileId': fileHeader['uuid'],
-      'fileName': fileHeader['name'],
-      'fileSize': fileHeader['size'],
+      'fileId': fileId,
+      'fileName': fileName,
+      'fileSize': fileSize,
       'filePath': command['filePath'],
       'clipboard': clipboard,
       'pendingAcceptance': true,
     });
 
-    final fileId = fileHeader['uuid'] as String;
     while (!shouldCancel() &&
         !shouldCancelTransfer(fileId) &&
         !shouldDeclineTransfer(fileId) &&
@@ -748,21 +794,26 @@ Future<String?> _sendFileCommand(
       throw const core.TransferCancelled();
     }
 
+    final startOffset = resumeOffsetFor(fileId).clamp(0, fileSize).toInt();
+
     toUiSendPort.send({
       'status': 'send_start',
-      'fileId': fileHeader['uuid'],
-      'fileName': fileHeader['name'],
-      'fileSize': fileHeader['size'],
+      'fileId': fileId,
+      'fileName': fileName,
+      'fileSize': fileSize,
       'filePath': command['filePath'],
+      'resumeOffset': startOffset,
       'clipboard': clipboard,
       'pendingAcceptance': false,
     });
 
     await core.sendSocketFrame(clientSocket, {
       'type': 'file_start',
-      'uuid': fileHeader['uuid'],
-      'name': fileHeader['name'],
-      'size': fileHeader['size'],
+      'uuid': fileId,
+      'name': fileName,
+      'size': fileSize,
+      'offset': startOffset,
+      'resumeKey': resumeKey,
       if (clipboard) 'clipboard': true,
     });
     fileStarted = true;
@@ -771,23 +822,33 @@ Future<String?> _sendFileCommand(
       fileId: fileId,
       file: fileToSend,
       chunks: chunksToSend,
-      fileSize: fileHeader['size'] as int,
+      fileSize: fileSize,
+      startOffset: startOffset,
       clientSocket: clientSocket,
       shouldCancel: shouldCancel,
       shouldPauseTransfer: shouldPauseTransfer,
       shouldCancelTransfer: shouldCancelTransfer,
       onPaused: onPaused,
+      onProgress: (progress) {
+        toUiSendPort.send({
+          'status': 'send_progress',
+          'fileId': fileId,
+          'progress': progress.clamp(0.0, 0.999),
+          'estimated': true,
+        });
+      },
     );
     await core.sendSocketFrame(clientSocket, {
       'type': 'file_end',
-      'fileId': fileHeader['uuid'],
+      'fileId': fileId,
+      'size': fileSize,
     });
     await clientSocket.flush();
 
     stopwatch.stop();
 
     await source?.dispose();
-    return fileHeader['uuid'] as String;
+    return fileId;
   } catch (e) {
     stopwatch.stop();
     await source?.dispose();
@@ -966,11 +1027,20 @@ Future<String?> _sendBatchCommand(
           file: entry.source.file,
           chunks: entry.source.chunks,
           fileSize: entry.header['size'] as int,
+          startOffset: 0,
           clientSocket: clientSocket,
           shouldCancel: shouldCancel,
           shouldPauseTransfer: shouldPauseTransfer,
           shouldCancelTransfer: shouldCancelTransfer,
           onPaused: onPaused,
+          onProgress: (progress) {
+            toUiSendPort.send({
+              'status': 'send_progress',
+              'fileId': fileId,
+              'progress': progress.clamp(0.0, 0.999),
+              'estimated': true,
+            });
+          },
         );
       } on core.TransferCancelled {
         fileCancelled = true;
@@ -1101,16 +1171,18 @@ Future<void> _sendFileSequentially({
   required File? file,
   required Stream<List<int>>? chunks,
   required int fileSize,
+  required int startOffset,
   required dynamic clientSocket,
   required bool Function() shouldCancel,
   required bool Function(String fileId) shouldPauseTransfer,
   required bool Function(String fileId) shouldCancelTransfer,
   Future<void> Function(String fileId)? onPaused,
+  void Function(double progress)? onProgress,
 }) async {
   // 每次发送 1 MB：帧头、JSON 元数据和 flush 的开销按块数计，块太小会把
   // 大文件的吞吐压下来（64 KB 时每 MB 有 16 次编码 + 16 次 flush）。
   const int chunkSize = 1024 * 1024;
-  if (fileSize <= 0) {
+  if (fileSize <= 0 || startOffset >= fileSize) {
     return;
   }
 
@@ -1119,11 +1191,14 @@ Future<void> _sendFileSequentially({
     await _sendChunksSequentially(
       fileId: fileId,
       chunks: chunkStream,
+      fileSize: fileSize,
+      startOffset: startOffset,
       clientSocket: clientSocket,
       shouldCancel: shouldCancel,
       shouldPauseTransfer: shouldPauseTransfer,
       shouldCancelTransfer: shouldCancelTransfer,
       onPaused: onPaused,
+      onProgress: onProgress,
     );
     return;
   }
@@ -1131,8 +1206,9 @@ Future<void> _sendFileSequentially({
   final raf = await file!.open();
   try {
     final buffer = Uint8List(chunkSize);
-    var position = 0;
+    var position = startOffset;
     var lastPauseNoticeAt = DateTime.fromMillisecondsSinceEpoch(0);
+    await raf.setPosition(startOffset);
 
     while (position < fileSize) {
       while (!shouldCancel() &&
@@ -1170,6 +1246,7 @@ Future<void> _sendFileSequentially({
         throw const core.TransferCancelled();
       }
       position += bytesRead;
+      onProgress?.call(fileSize == 0 ? 1.0 : position / fileSize);
     }
   } finally {
     await raf.close();
@@ -1183,16 +1260,21 @@ Future<void> _sendFileSequentially({
 Future<void> _sendChunksSequentially({
   required String fileId,
   required Stream<List<int>> chunks,
+  required int fileSize,
+  required int startOffset,
   required dynamic clientSocket,
   required bool Function() shouldCancel,
   required bool Function(String fileId) shouldPauseTransfer,
   required bool Function(String fileId) shouldCancelTransfer,
   Future<void> Function(String fileId)? onPaused,
+  void Function(double progress)? onProgress,
 }) async {
   // 文档流每次给的数据量不定（常见 8~64 KB），攒到 1 MB 再发，减少帧数与 flush 次数。
   const int sendBatchBytes = 1024 * 1024;
   var lastPauseNoticeAt = DateTime.fromMillisecondsSinceEpoch(0);
   final pending = BytesBuilder(copy: false);
+  var remainingSkip = startOffset;
+  var sentBytes = startOffset;
 
   Future<void> flushPending() async {
     if (pending.isEmpty) {
@@ -1207,12 +1289,23 @@ Future<void> _sendChunksSequentially({
       },
       payloadBytes: chunk,
     );
+    sentBytes += chunk.length;
+    onProgress?.call(fileSize == 0 ? 1.0 : sentBytes / fileSize);
   }
 
   try {
-    await for (final rawChunk in chunks) {
-      if (rawChunk.isEmpty) {
+    await for (final originalChunk in chunks) {
+      if (originalChunk.isEmpty) {
         continue;
+      }
+      var rawChunk = originalChunk;
+      if (remainingSkip > 0) {
+        if (rawChunk.length <= remainingSkip) {
+          remainingSkip -= rawChunk.length;
+          continue;
+        }
+        rawChunk = rawChunk.sublist(remainingSkip);
+        remainingSkip = 0;
       }
       while (!shouldCancel() &&
           !shouldCancelTransfer(fileId) &&
@@ -1254,6 +1347,7 @@ void _handleSocketConnection(
   void Function(String fileId, {String? pausedBy})? onRemoteTransferResumed,
   void Function(String fileId)? onRemoteTransferCancelled,
   void Function(String fileId)? onRemoteTransferAccepted,
+  void Function(String fileId, int offset)? onRemoteTransferOffset,
   void Function(String fileId)? onRemoteTransferDeclined,
   required Map<String, dynamic> localPeerInfo,
 }) {
@@ -1266,6 +1360,9 @@ void _handleSocketConnection(
   int? chunkBytesRemaining;
   bool isChunkedFileFrame = false;
   bool isDiscardingCancelledFile = false;
+  // A socket loss is not the same as a cancelled transfer: keep the partial
+  // file so the next connection can resume instead of starting over.
+  bool preservePartialOnDisconnect = false;
   DateTime lastProgressUpdate = DateTime.fromMillisecondsSinceEpoch(0);
 
   core.OutputTarget? activeOutputTarget;
@@ -1294,6 +1391,27 @@ void _handleSocketConnection(
     chunkBytesRemaining = null;
     isChunkedFileFrame = false;
     isDiscardingCancelledFile = false;
+    preservePartialOnDisconnect = false;
+  }
+
+  /// Closes the writer but leaves the partial file on disk for a later resume.
+  Future<void> preservePartialOutput() async {
+    final target = activeOutputTarget;
+    if (target == null) {
+      resetFrameState();
+      return;
+    }
+
+    try {
+      if (activeFileHeader?['clipboard'] != true) {
+        await target.closeWriter();
+      }
+    } catch (_) {
+      // The file is already unusable; deletePartialOutput is used for that path.
+    }
+
+    activeOutputTarget = null;
+    resetFrameState();
   }
 
   Future<void> discardPartialOutput() async {
@@ -1325,18 +1443,13 @@ void _handleSocketConnection(
   }
 
   void sendControlFrame(Map<String, dynamic> payload) {
-    try {
-      final payloadBytes = utf8.encode(jsonEncode(payload));
-      final header = ByteData(8);
-      header.setUint32(0, payloadBytes.length, Endian.big);
-      header.setUint32(4, 0, Endian.big);
-      socket.add(header.buffer.asUint8List());
-      socket.add(payloadBytes);
-    } catch (e) {
-      // 连接已断时写帧会抛异常，由 socket 的 onError/onDone 上报本次会话结束；
-      // 这里吞掉，避免异常冒到读循环变成未捕获异常。
-      debugPrint('[FRAME] sendControlFrame failed: $e');
-    }
+    // All frames share one per-socket writer, so a heartbeat waits for the
+    // in-flight file chunk instead of hitting a bound sink.
+    unawaited(
+      core.sendControlFrame(socket, payload).catchError((Object error) {
+        debugPrint('[FRAME] sendControlFrame failed: $error');
+      }),
+    );
   }
 
   void sendLocalPeerInfo() {
@@ -1486,6 +1599,21 @@ void _handleSocketConnection(
       case 'file_received_ack':
         final fileId = headerJson['fileId'] as String?;
         if (fileId != null) {
+          final expectedSize = _sendingFileSizes.remove(fileId);
+          final ackSize = (headerJson['size'] as num?)?.toInt();
+          if (ackSize != null &&
+              expectedSize != null &&
+              ackSize != expectedSize) {
+            toUiSendPort.send({
+              'status': 'error',
+              'fatal': 'true',
+              'message':
+                  'Received file size mismatch: expected $expectedSize bytes '
+                  'but the receiver confirmed $ackSize bytes.',
+            });
+            closeSocket();
+            return false;
+          }
           onTransferAcknowledged?.call(fileId);
           toUiSendPort.send({
             'status': 'send_complete',
@@ -1511,12 +1639,23 @@ void _handleSocketConnection(
         final fileName = headerJson['name'] as String?;
         final fileSize = headerJson['size'] as int?;
         if (fileId != null && fileName != null && fileSize != null) {
+          final resumeKey = headerJson['resumeKey'] as String? ?? '';
+          final resumeOffset = await _partialSizeFor(
+            configuredDownloadDirectory: getDownloadDirectory?.call(),
+            resumeKey: resumeKey,
+          );
+          if (resumeOffset > 0) {
+            _resumeOffsets[fileId] = resumeOffset
+                .clamp(0, fileSize)
+                .toInt();
+          }
           toUiSendPort.send({
             'status': 'start',
             'fileId': fileId,
             'fileName': core.displayFileName(fileName),
             'filePath': '',
             'fileSize': fileSize,
+            'resumeOffset': resumeOffset.clamp(0, fileSize),
             'pendingAcceptance': true,
             'clipboard': headerJson['clipboard'] == true,
           });
@@ -1543,6 +1682,8 @@ void _handleSocketConnection(
       case 'file_transfer_accept':
         final fileId = headerJson['fileId'] as String?;
         if (fileId != null) {
+          final offset = (headerJson['offset'] as num?)?.toInt() ?? 0;
+          onRemoteTransferOffset?.call(fileId, offset);
           onRemoteTransferAccepted?.call(fileId);
         }
         return true;
@@ -1606,7 +1747,7 @@ void _handleSocketConnection(
   }
 
   /// 粘贴板接收目标：内容只留在内存里，关闭时写回系统粘贴板，不生成磁盘文件。
-  core.OutputTarget _createClipboardOutputTarget({required String fileName}) {
+  core.OutputTarget createClipboardOutputTarget({required String fileName}) {
     final bytes = <int>[];
     return core.OutputTarget.custom(
       fileName: fileName,
@@ -1624,12 +1765,27 @@ void _handleSocketConnection(
     Map<String, dynamic> headerJson,
     int fileSize, {
     required bool chunked,
+    required int startOffset,
+    required String resumeKey,
   }) async {
     final fileName = headerJson['name'] as String;
     final isClipboard = headerJson['clipboard'] == true;
+    final offeredFileId = headerJson['uuid'] as String?;
+    if (offeredFileId != null) {
+      _resumeOffsets.remove(offeredFileId);
+    }
+    if (startOffset < 0 || startOffset > fileSize) {
+      sendConnectionError(
+        'Invalid resume offset $startOffset for a $fileSize byte file.',
+      );
+      closeSocket();
+      return;
+    }
+    // A previous connection may still be closing its partial file.
+    await _pendingReceiveCleanup.catchError((_) {});
     core.OutputTarget? fileTarget;
     if (isClipboard) {
-      fileTarget = _createClipboardOutputTarget(
+      fileTarget = createClipboardOutputTarget(
         fileName: core.displayFileName(fileName),
       );
     } else {
@@ -1637,7 +1793,10 @@ void _handleSocketConnection(
         fileTarget = await _createOutputTarget(
           configuredDownloadDirectory: getDownloadDirectory?.call(),
           originalFileName: core.displayFileName(fileName),
+          resumeKey: resumeKey,
+          startOffset: startOffset,
           onWriteError: (e) {
+            preservePartialOnDisconnect = false;
             connectionErrorSent = true;
             toUiSendPort.send({
               'status': 'error',
@@ -1662,7 +1821,8 @@ void _handleSocketConnection(
     activeFileHeader = headerJson;
     fileBytesLength = fileSize;
     isChunkedFileFrame = chunked;
-    bytesWritten = 0;
+    bytesWritten = startOffset;
+    preservePartialOnDisconnect = !isClipboard;
     lastProgressPercent = -1;
     stopwatch
       ..reset()
@@ -1674,6 +1834,7 @@ void _handleSocketConnection(
       'fileName': fileTarget.fileName,
       'filePath': fileTarget.filePath,
       'fileSize': fileSize,
+      'resumeOffset': startOffset,
       'clipboard': isClipboard,
     });
   }
@@ -1683,16 +1844,14 @@ void _handleSocketConnection(
     final header = activeFileHeader!;
     final timeTaken = stopwatch.elapsed.inSeconds.toString();
 
-    sendProgress(force: true);
-    sendControlFrame({
-      'type': 'file_received_ack',
-      'fileId': header['uuid'],
-      'fileName': target.fileName,
-      'timeTaken': timeTaken,
-    });
-
+    // Close and finalize before acknowledging: the sender must not be told the
+    // file is complete while the receiver is still flushing or renaming it.
     try {
       await target.closeWriter();
+      final finalize = target.finalizeFile;
+      if (finalize != null) {
+        await finalize();
+      }
     } catch (e) {
       connectionErrorSent = true;
       toUiSendPort.send({
@@ -1708,6 +1867,15 @@ void _handleSocketConnection(
       closeSocket();
       return;
     }
+
+    sendProgress(force: true);
+    sendControlFrame({
+      'type': 'file_received_ack',
+      'fileId': header['uuid'],
+      'fileName': target.fileName,
+      'size': fileBytesLength,
+      'timeTaken': timeTaken,
+    });
 
     toUiSendPort.send({
       'status': 'completed',
@@ -1748,7 +1916,13 @@ void _handleSocketConnection(
             if (fileSize == null) {
               continue;
             }
-            await beginFileFrame(headerJson, fileSize, chunked: true);
+            await beginFileFrame(
+              headerJson,
+              fileSize,
+              chunked: true,
+              startOffset: (headerJson['offset'] as num?)?.toInt() ?? 0,
+              resumeKey: headerJson['resumeKey'] as String? ?? '',
+            );
             continue;
           }
           final keepReading = await handleControlFrame(headerJson);
@@ -1770,6 +1944,8 @@ void _handleSocketConnection(
           headerJson,
           frameHeader.payloadLength,
           chunked: false,
+          startOffset: 0,
+          resumeKey: '',
         );
       }
 
@@ -1809,13 +1985,31 @@ void _handleSocketConnection(
               final fileSize = headerJson['size'] as int?;
               resetFrameState();
               if (fileSize != null) {
-                await beginFileFrame(headerJson, fileSize, chunked: true);
+                await beginFileFrame(
+                  headerJson,
+                  fileSize,
+                  chunked: true,
+                  startOffset: 0,
+                  resumeKey: '',
+                );
               }
               continue;
             }
             if (frameType == 'file_end') {
               final wasCancelled = headerJson['cancelled'] == true;
               if (!isDiscardingCancelledFile && !wasCancelled) {
+                final expectedSize =
+                    headerJson['size'] as int? ?? fileBytesLength;
+                if (expectedSize == null || bytesWritten != expectedSize) {
+                  final received = bytesWritten;
+                  await discardPartialOutput();
+                  sendConnectionError(
+                    'File transfer incomplete: received $received of '
+                    '${expectedSize ?? '?'} bytes.',
+                  );
+                  closeSocket();
+                  return;
+                }
                 await completeFileFrame();
               } else {
                 final cancelledFileId =
@@ -1963,9 +2157,11 @@ void _handleSocketConnection(
       }
     },
     onDone: () {
-      unawaited(
-        activeOutputTarget == null ? cleanupOpenFile() : discardPartialOutput(),
-      );
+      final preserve = preservePartialOnDisconnect;
+      _pendingReceiveCleanup = activeOutputTarget == null
+          ? cleanupOpenFile()
+          : (preserve ? preservePartialOutput() : discardPartialOutput());
+      unawaited(_pendingReceiveCleanup.catchError((_) {}));
       final suppressErrors = shouldSuppressConnectionErrors?.call() ?? false;
       if (suppressErrors) {
         gracefulDisconnect = true;
@@ -1986,9 +2182,11 @@ void _handleSocketConnection(
       closeSocket();
     },
     onError: (e, st) {
-      unawaited(
-        activeOutputTarget == null ? cleanupOpenFile() : discardPartialOutput(),
-      );
+      final preserve = preservePartialOnDisconnect;
+      _pendingReceiveCleanup = activeOutputTarget == null
+          ? cleanupOpenFile()
+          : (preserve ? preservePartialOutput() : discardPartialOutput());
+      unawaited(_pendingReceiveCleanup.catchError((_) {}));
       final suppressErrors = shouldSuppressConnectionErrors?.call() ?? false;
       if (suppressErrors) {
         gracefulDisconnect = true;
@@ -2040,7 +2238,7 @@ void _handleSocketConnection(
       // 正在本地处理数据（例如写文件），对端这段时间收不到进度；刷新本地计时
       // 以免把自己算成掉线，同时照常发心跳让对端知道本机还在。
       lastInboundAt = now;
-    } else if (now.difference(lastInboundAt) >= const Duration(seconds: 15)) {
+    } else if (now.difference(lastInboundAt) >= const Duration(seconds: 30)) {
       heartbeatTimer?.cancel();
       heartbeatTimer = null;
       // 明确标记是心跳判死，和 socket 报错、对端关闭连接区分开。
@@ -2089,61 +2287,61 @@ Future<String> _resolveDownloadDirectory({String? commandDirectory}) async {
   return fallback.path;
 }
 
-/// SAF-specific output target (platform-dependent, kept in app layer).
-///
-/// 数据先攒到 [_safWriteBatchBytes] 再交给插件：插件每收到一次写入都要跨一次
-/// 平台通道并复制数据，按小片提交会把大文件的写入速度压得很低。
-core.OutputTarget _createSafOutputTarget({
-  required String directoryUri,
-  required String fileName,
-  required String mimeType,
-}) {
-  const int safWriteBatchBytes = 1024 * 1024;
-  final controller = StreamController<List<int>>();
-  final saf = Saf();
-  final writeFuture = saf.writeFileStream(
-    directoryUri,
-    fileName,
-    mimeType,
-    controller.stream,
-  );
-  final pending = BytesBuilder(copy: false);
-
-  void flushPending() {
-    if (pending.isEmpty) {
-      return;
-    }
-    controller.add(pending.takeBytes());
+String _resumeKeySegment(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return 'empty';
   }
-
-  return core.OutputTarget.custom(
-    fileName: fileName,
-    filePath: '$directoryUri/$fileName',
-    writeChunk: (data) {
-      pending.add(data);
-      if (pending.length >= safWriteBatchBytes) {
-        flushPending();
-      }
-    },
-    closeWriter: () async {
-      flushPending();
-      await controller.close();
-      await writeFuture;
-    },
-    deleteFile: () async {
-      pending.clear();
-      await controller.close();
-      try {
-        final entity = await writeFuture;
-        await saf.delete(entity.uri);
-      } catch (_) {}
-    },
-  );
+  final safe = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  return safe.isEmpty ? 'empty' : safe;
 }
 
+String _partialPathFor(String directory, String resumeKey) {
+  return '$directory/${_resumeKeySegment(resumeKey)}.flashbytepart';
+}
+
+Future<String> _partialDirectoryForResolved(String resolvedDirectory) async {
+  if (Platform.isAndroid) {
+    final support = await getApplicationSupportDirectory();
+    return '${support.path}/flashbyte_partial';
+  }
+  return '$resolvedDirectory/.flashbyte_partial';
+}
+
+/// Reads the number of already-received bytes for [resumeKey].
+///
+/// The receiver writes into a regular partial file even when the final
+/// destination is a SAF tree, so this lookup works for both platforms.
+Future<int> _partialSizeFor({
+  required String? configuredDownloadDirectory,
+  required String resumeKey,
+}) async {
+  if (resumeKey.isEmpty) {
+    return 0;
+  }
+  final resolved = await _resolveDownloadDirectory(
+    commandDirectory: configuredDownloadDirectory,
+  );
+  final directory = await _partialDirectoryForResolved(resolved);
+  final file = File(_partialPathFor(directory, resumeKey));
+  try {
+    if (await file.exists()) {
+      return await file.length();
+    }
+  } catch (_) {}
+  return 0;
+}
+
+/// Creates a resumable output target.
+///
+/// Data is always written to a regular partial file first. On success the
+/// partial file is renamed (regular destination) or streamed into the SAF tree
+/// and then deleted. That keeps append/resume independent of SAF capabilities.
 Future<core.OutputTarget> _createOutputTarget({
   required String? configuredDownloadDirectory,
   required String originalFileName,
+  required String resumeKey,
+  required int startOffset,
   void Function(Object error)? onWriteError,
 }) async {
   var resolvedDirectory = await _resolveDownloadDirectory(
@@ -2169,35 +2367,100 @@ Future<core.OutputTarget> _createOutputTarget({
 
   if (usesSaf) {
     final saf = Saf();
-
     final dirStat = await saf.stat(resolvedDirectory);
     if (dirStat == null) {
       throw Exception(
         'Download folder is no longer available. Select a new folder in Settings.',
       );
     }
-
-    final fileName = await _generateSafUniqueFileName(
-      saf: saf,
-      directoryUri: resolvedDirectory,
-      originalFileName: originalFileName,
-    );
-    return _createSafOutputTarget(
-      directoryUri: resolvedDirectory,
-      fileName: fileName,
-      mimeType: 'application/octet-stream',
-    );
   }
 
-  final fileName = core.generateUniqueFileName(
+  final partialDirectory = await _partialDirectoryForResolved(
     resolvedDirectory,
-    originalFileName,
   );
-  final filePath = "$resolvedDirectory/$fileName";
-  return core.OutputTarget.regular(
-    fileName: fileName,
-    filePath: filePath,
-    onWriteError: onWriteError,
+  await Directory(partialDirectory).create(recursive: true);
+  final partialFile = File(_partialPathFor(partialDirectory, resumeKey));
+
+  var existingSize = 0;
+  try {
+    if (await partialFile.exists()) {
+      existingSize = await partialFile.length();
+    }
+  } catch (_) {}
+  if (existingSize < startOffset) {
+    throw Exception(
+      'Partial file is shorter than the requested resume offset '
+      '($existingSize < $startOffset).',
+    );
+  }
+  if (existingSize > startOffset) {
+    final handle = await partialFile.open(mode: FileMode.append);
+    try {
+      await handle.truncate(startOffset);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  final sink = partialFile.openWrite(mode: FileMode.append);
+  if (onWriteError != null) {
+    sink.done.then((_) {}, onError: onWriteError);
+  }
+
+  final finalName = usesSaf
+      ? await _generateSafUniqueFileName(
+          saf: Saf(),
+          directoryUri: resolvedDirectory,
+          originalFileName: originalFileName,
+        )
+      : core.generateUniqueFileName(resolvedDirectory, originalFileName);
+
+  Future<void> finalize() async {
+    if (usesSaf) {
+      final saf = Saf();
+      final entity = await saf.writeFileStream(
+        resolvedDirectory,
+        finalName,
+        'application/octet-stream',
+        partialFile.openRead(),
+      );
+      final stat = await saf.stat(entity.uri);
+      final expected = await partialFile.length();
+      if (stat == null || stat.length != expected) {
+        try {
+          await saf.delete(entity.uri);
+        } catch (_) {}
+        throw Exception('Could not save received file.');
+      }
+      await partialFile.delete();
+      return;
+    }
+
+    final finalFile = File('$resolvedDirectory/$finalName');
+    try {
+      await partialFile.rename(finalFile.path);
+    } catch (_) {
+      // A cross-device rename is not possible on every platform; copy then
+      // delete the partial instead.
+      await partialFile.copy(finalFile.path);
+      await partialFile.delete();
+    }
+  }
+
+  return core.OutputTarget.custom(
+    fileName: finalName,
+    filePath: '$resolvedDirectory/$finalName',
+    writeChunk: (data) => sink.add(data),
+    closeWriter: () => sink.close(),
+    finalizeFile: finalize,
+    deleteFile: () async {
+      await sink.close();
+      try {
+        if (await partialFile.exists()) {
+          await partialFile.delete();
+        }
+      } catch (_) {}
+    },
   );
 }
 
