@@ -55,11 +55,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
   String? _fatalErrorReason;
   _SessionIssue? _sessionIssue;
 
-  // The last sent file that was interrupted; used to reconnect and resume
-  // instead of forcing the user to pick the multi-gigabyte file again.
-  String? _resumeFilePath;
-  String? _resumeFileName;
-  String? _resumeFileUuid;
+  // The sent files that were interrupted; used to reconnect and resume the
+  // whole batch instead of forcing the user to pick multi-gigabyte files again.
+  final List<_ResumeTarget> _resumeTargets = [];
   Timer? _resumeTimer;
   bool _resumeInProgress = false;
   bool _pendingResumeAfterConnect = false;
@@ -71,6 +69,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 当前请求是否已被接受；批量请求在文件之间短暂没有“传输中”卡片时仍按传输中处理。
   bool _requestAccepted = false;
+
+  /// 已被暂停的文件 id。排队中的文件也会记录，但卡片保持“排队”，不显示逐文件按键。
+  final Set<String> _pausedFileIds = {};
+
+  /// 暂停是否由对端发起；由对端暂停时“全部继续”不可点。
+  bool _requestPausedByPeer = false;
   Map<String, dynamic>? _peerInfo;
 
   StreamSubscription? _streamSubscription;
@@ -276,18 +280,14 @@ class _TcpChatPageState extends State<TcpChatPage> {
             _finishRequestIfSettled();
             break;
           case 'transfer_paused':
-            _updateTransferStatus(
+            _applyPaused(
               message['fileId'] as String?,
-              TransferStatus.paused,
               pausedBy: message['pausedBy'] as String?,
               canResume: message['canResume'] as bool? ?? false,
             );
             break;
           case 'transfer_resumed':
-            _updateTransferStatus(
-              message['fileId'] as String?,
-              TransferStatus.inProgress,
-            );
+            _applyResumed(message['fileId'] as String?);
             break;
           case 'transfer_accepted':
             _requestAccepted = true;
@@ -396,9 +396,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
                     children: [
                       Expanded(
                         child: ConstrainedBox(
-                          constraints: (Platform.isAndroid || Platform.isIOS)
-                              ? BoxConstraints()
-                              : BoxConstraints(maxWidth: 500),
+                          // 所有平台同一阅读宽度：窗口窄时铺满，窗口很宽时也不再压成
+                          // 500 宽的一条窄带，避免桌面端一片留白。
+                          constraints: const BoxConstraints(maxWidth: 1100),
                           child: ValueListenableBuilder(
                             valueListenable: _fileTransferWidgets,
                             builder: (context, widgets, child) => ListView(
@@ -463,9 +463,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                       ),
                       const Divider(height: 0),
                       ConstrainedBox(
-                        constraints: (Platform.isAndroid || Platform.isIOS)
-                            ? BoxConstraints()
-                            : BoxConstraints(maxWidth: 500),
+                        constraints: const BoxConstraints(maxWidth: 1100),
                         child: Padding(
                           padding: const EdgeInsets.all(20),
                           child:
@@ -730,17 +728,16 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
     final l10n = AppLocalizations.of(context);
     if (_requestInTransfer) {
-      final allPaused = _allPaused(_requestWidgets);
+      // 暂停状态由页面记录（排队文件也计入暂停），不再从卡片状态反推。
+      final allPaused = _requestPaused;
       // 对方暂停时本端不能继续，按键置灰；本端暂停时显示“全部继续”。
-      final canResumeAny = _requestWidgets.any(
-        (widget) =>
-            widget.status == TransferStatus.paused && widget.canResume,
-      );
       return _requestButtonRow([
         _requestPrimaryButton(
           icon: allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
           label: allPaused ? l10n.resumeAll : l10n.pauseAll,
-          onPressed: allPaused && !canResumeAny ? null : _toggleAllPaused,
+          onPressed: allPaused && _requestPausedByPeer
+              ? null
+              : _toggleAllPaused,
         ),
         _requestSecondaryButton(
           icon: Icons.close_rounded,
@@ -851,7 +848,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         subtitle: _issueSubtitle(l10n),
         disconnected: true,
       );
-      if (!interrupted || _resumeFilePath == null) {
+      if (!interrupted || _resumeTargets.isEmpty) {
         return status;
       }
       return Column(
@@ -870,12 +867,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
       );
     }
     if (_requestInTransfer) {
-      final allPaused = _allPaused(_requestWidgets);
+      final allPaused = _requestPaused;
       // 本端发起的暂停能自己继续；对方暂停时只能等对方继续。
-      final canResumeAny = _requestWidgets.any(
-        (widget) =>
-            widget.status == TransferStatus.paused && widget.canResume,
-      );
       return _buildTransferStatusButton(
         icon: allPaused
             ? Icons.pause_circle_outline_rounded
@@ -883,9 +876,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
         title: allPaused ? l10n.transferPaused : l10n.transferInProgress,
         subtitle: !allPaused
             ? l10n.waitForTransferToFinish
-            : canResumeAny
-            ? l10n.transferPausedHint
-            : l10n.transferPausedWaiting,
+            : _requestPausedByPeer
+            ? l10n.transferPausedWaiting
+            : l10n.transferPausedHint,
         disconnected: false,
       );
     }
@@ -1185,16 +1178,20 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
     final interrupted = isSharingInProgress || _hasUnfinishedTransfers();
     if (interrupted) {
+      _resumeTargets.clear();
       for (final widget in _fileTransferWidgets.value) {
         if (!widget.isReceived &&
             !widget.clipboard &&
             widget.filePath.isNotEmpty &&
             widget.status != TransferStatus.completed &&
             widget.status != TransferStatus.cancelled) {
-          _resumeFilePath = widget.filePath;
-          _resumeFileName = widget.fileName;
-          _resumeFileUuid = widget.uuid;
-          break;
+          _resumeTargets.add(
+            _ResumeTarget(
+              path: widget.filePath,
+              name: widget.fileName,
+              uuid: widget.uuid,
+            ),
+          );
         }
       }
     }
@@ -1205,18 +1202,17 @@ class _TcpChatPageState extends State<TcpChatPage> {
           : _SessionIssue.connectionLost;
     });
     isDisconnected.value = true;
-    if (_resumeFilePath != null && !_leavingPage && !_disconnectSignalSent) {
+    if (_resumeTargets.isNotEmpty && !_leavingPage && !_disconnectSignalSent) {
       _scheduleResume();
     }
   }
 
-  /// Reconnects to the same peer and lets the isolate offer the file again.
+  /// Reconnects to the same peer and lets the isolate offer the files again.
   ///
-  /// The receiver keeps a partial file keyed by the file path/name/size, so
-  /// the new offer resumes at the offset it reports.
+  /// The receiver keeps a partial file per resume key, so every interrupted
+  /// file of a batch continues from the offset it reports.
   Future<void> _resumeTransfer() async {
-    final path = _resumeFilePath;
-    if (path == null || _resumeInProgress || _pendingResumeAfterConnect) {
+    if (_resumeTargets.isEmpty || _resumeInProgress || _pendingResumeAfterConnect) {
       return;
     }
     final peer = _peerInfo;
@@ -1256,12 +1252,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   void _scheduleResume() {
     _resumeTimer?.cancel();
-    if (_resumeFilePath == null) {
+    if (_resumeTargets.isEmpty) {
       return;
     }
     _resumeAttempts = 0;
     _resumeTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted || _leavingPage || _resumeFilePath == null) {
+      if (!mounted || _leavingPage || _resumeTargets.isEmpty) {
         timer.cancel();
         return;
       }
@@ -1277,7 +1273,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
     });
   }
 
-  /// Handles a fresh connection and resumes the interrupted sent file once.
+  /// Handles a fresh connection and resumes every interrupted sent file once.
   void _handleConnectionEstablished() {
     if (!mounted) {
       return;
@@ -1288,7 +1284,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
     _resumeInProgress = false;
     _disconnectSignalSent = false;
     final shouldSendResume =
-        _pendingResumeAfterConnect && _resumeFilePath != null;
+        _pendingResumeAfterConnect && _resumeTargets.isNotEmpty;
     _pendingResumeAfterConnect = false;
 
     if (isDisconnected.value || _sessionIssue != null || _fatalErrorReceived) {
@@ -1301,34 +1297,39 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
 
     if (!shouldSendResume) {
-      // A normal new connection: drop any stale resume target so a later
-      // disconnect cannot resurrect an old file.
-      _resumeFilePath = null;
-      _resumeFileName = null;
-      _resumeFileUuid = null;
+      // A normal new connection: drop any stale resume targets so a later
+      // disconnect cannot resurrect old files.
+      _resumeTargets.clear();
       return;
     }
 
-    final path = _resumeFilePath!;
-    final name = _resumeFileName;
-    final uuid = _resumeFileUuid;
-    _resumeFilePath = null;
-    _resumeFileName = null;
-    _resumeFileUuid = null;
-    if (uuid != null) {
-      _fileTransferWidgets.value = _fileTransferWidgets.value
-          .where((widget) => widget.uuid != uuid)
-          .toList();
+    final targets = List<_ResumeTarget>.of(_resumeTargets);
+    _resumeTargets.clear();
+    // 续传会建立新的请求 id，旧的请求记录一并清掉，避免底部按键按旧集合判断。
+    _requestFileIds = [];
+    _requestAccepted = false;
+    final resumedIds = {for (final target in targets) target.uuid};
+    _fileTransferWidgets.value = _fileTransferWidgets.value
+        .where((widget) => !resumedIds.contains(widget.uuid))
+        .toList();
+    for (final uuid in resumedIds) {
       _transferProgress.remove(uuid)?.dispose();
       _pendingTransferStatuses.remove(uuid);
       _pendingTransferCanResume.remove(uuid);
       _pendingTransferPausedBy.remove(uuid);
+      _pausedFileIds.remove(uuid);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _leavingPage) {
         return;
       }
-      SocketService.instance.sendFile(path, displayName: name);
+      // 逐文件重新发起；连续的 send_file 会被引擎合并成一次批量请求。
+      for (final target in targets) {
+        SocketService.instance.sendFile(
+          target.path,
+          displayName: target.name,
+        );
+      }
     });
   }
 
@@ -1355,6 +1356,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           value: null,
           status: TransferStatus.completed,
           canResume: true,
+          onCancelQueued: () => _cancelQueuedFile(widget.uuid),
         );
       }
       return widget;
@@ -1414,6 +1416,68 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
+  /// 暂停回执只把真正在传输的卡片改成“已暂停”，排队卡保持排队。
+  ///
+  /// 批量暂停会逐个文件下发，引擎对排队文件也会回执；如果让排队卡跟着变成
+  /// paused，卡片会凭空长出“继续/取消”按键，取消或继续后还会被误标成传输中。
+  void _applyPaused(
+    String? uuid, {
+    String? pausedBy,
+    bool canResume = false,
+  }) {
+    if (uuid == null || !mounted) {
+      return;
+    }
+    _pausedFileIds.add(uuid);
+    if (pausedBy != null) {
+      _requestPausedByPeer = pausedBy != _localTransferRole;
+    }
+    final widget = _widgetFor(uuid);
+    if (widget == null || widget.status != TransferStatus.inProgress) {
+      return;
+    }
+    _updateTransferStatus(
+      uuid,
+      TransferStatus.paused,
+      pausedBy: pausedBy,
+      canResume: canResume,
+    );
+  }
+
+  /// 继续回执只恢复已暂停的卡片；排队卡等自己的 send_start 再进入传输中。
+  void _applyResumed(String? uuid) {
+    if (uuid == null || !mounted) {
+      return;
+    }
+    _pausedFileIds.remove(uuid);
+    if (_pausedFileIds.isEmpty) {
+      _requestPausedByPeer = false;
+    }
+    final widget = _widgetFor(uuid);
+    if (widget == null || widget.status != TransferStatus.paused) {
+      return;
+    }
+    _updateTransferStatus(uuid, TransferStatus.inProgress);
+  }
+
+  TransferWidget? _widgetFor(String uuid) {
+    for (final widget in _fileTransferWidgets.value) {
+      if (widget.uuid == uuid) {
+        return widget;
+      }
+    }
+    return null;
+  }
+
+  /// 请求内卡片的显示角色，用于区分本端与对端发起的暂停。
+  String get _localTransferRole {
+    final widgets = _requestWidgets;
+    if (widgets.isEmpty) {
+      return 'sender';
+    }
+    return _transferRole(widgets.first.isReceived);
+  }
+
   void _prepopulateBatchWidget(Map<String, dynamic> file) {
     final uuid = file['fileId'] as String?;
     final fileName = file['fileName'] as String?;
@@ -1441,6 +1505,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         onCancel: () => _cancelTransfer(uuid, isReceived: true),
         onAccept: () => SocketService.instance.acceptTransfer(uuid),
         onDecline: () => SocketService.instance.declineTransfer(uuid),
+        onCancelQueued: () => _cancelQueuedFile(uuid),
       ),
     ];
   }
@@ -1502,6 +1567,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         onAccept: onAccept ?? () => SocketService.instance.acceptTransfer(uuid),
         onDecline:
             onDecline ?? () => SocketService.instance.declineTransfer(uuid),
+        onCancelQueued: () => _cancelQueuedFile(uuid),
       ),
     ];
   }
@@ -1559,6 +1625,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           _cancelTransfer(widget.uuid, isReceived: widget.isReceived),
       onAccept: () => SocketService.instance.acceptTransfer(widget.uuid),
       onDecline: () => SocketService.instance.declineTransfer(widget.uuid),
+      onCancelQueued: () => _cancelQueuedFile(widget.uuid),
     );
   }
 
@@ -1573,40 +1640,79 @@ class _TcpChatPageState extends State<TcpChatPage> {
     SocketService.instance.cancelTransfer(fileId);
   }
 
-  /// 未结束的传输是否全部处于暂停状态。
-  bool _allPaused(List<TransferWidget> widgets) {
-    final active = widgets.where(
-      (widget) =>
-          widget.status != TransferStatus.completed &&
-          widget.status != TransferStatus.cancelled,
-    );
-    return active.isNotEmpty &&
-        active.every((widget) => widget.status == TransferStatus.paused);
+  /// 取消排队中的单个文件。
+  ///
+  /// 只有在整批还没开始（第一个文件仍是 pending/queued）时，取消第一个文件才
+  /// 等同于取消整批；一旦第一个文件已经开始传输，其余文件都只取消自己。
+  void _cancelQueuedFile(String uuid) {
+    final widget = _widgetFor(uuid);
+    if (widget == null) {
+      return;
+    }
+    final headId = _requestFileIds.isEmpty ? null : _requestFileIds.first;
+    final head = headId == null ? null : _widgetFor(headId);
+    final headNotStarted =
+        head != null &&
+        (head.status == TransferStatus.pending ||
+            head.status == TransferStatus.queued);
+    if (uuid == headId && headNotStarted) {
+      if (_requestIsReceiver) {
+        _declineAllRequest();
+      } else {
+        _cancelRequest();
+      }
+      return;
+    }
+    _cancelTransfer(uuid, isReceived: widget.isReceived);
   }
 
-  /// 全部暂停与全部继续的切换，按钮文案由 [_allPaused] 决定。
+  /// 本请求是否处于暂停状态（含排队文件）。
+  bool get _requestPaused =>
+      _pausedFileIds.isNotEmpty && _requestHasUnfinished;
+
+  bool get _requestHasUnfinished => _requestWidgets.any(
+    (widget) =>
+        widget.status != TransferStatus.completed &&
+        widget.status != TransferStatus.cancelled,
+  );
+
+  /// 全部暂停与全部继续的切换。
   void _toggleAllPaused() {
     final widgets = _requestWidgets;
-    final resume = _allPaused(widgets);
+    final resume = _pausedFileIds.isNotEmpty;
     for (final widget in widgets) {
       if (widget.status == TransferStatus.completed ||
           widget.status == TransferStatus.cancelled) {
         continue;
       }
       if (resume) {
-        if (widget.status != TransferStatus.paused) continue;
         SocketService.instance.resumeTransfer(
           widget.uuid,
           isReceiver: widget.isReceived,
         );
       } else {
-        if (widget.status == TransferStatus.paused) continue;
         SocketService.instance.pauseTransfer(
           widget.uuid,
           isReceiver: widget.isReceived,
         );
       }
     }
+
+    setState(() {
+      if (resume) {
+        _pausedFileIds.clear();
+        _requestPausedByPeer = false;
+      } else {
+        _requestPausedByPeer = false;
+        for (final widget in widgets) {
+          if (widget.status == TransferStatus.completed ||
+              widget.status == TransferStatus.cancelled) {
+            continue;
+          }
+          _pausedFileIds.add(widget.uuid);
+        }
+      }
+    });
   }
 
   /// 取消当前请求里尚未结束的传输；发送方向按用户取消处理。
@@ -1706,6 +1812,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
     setState(() {
       _requestFileIds = [];
       _requestAccepted = false;
+      _pausedFileIds.clear();
+      _requestPausedByPeer = false;
       isSharingInProgress = false;
     });
   }
@@ -1817,6 +1925,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
     setState(() {
       _requestAccepted = false;
+      _pausedFileIds.clear();
+      _requestPausedByPeer = false;
       isSharingInProgress = false;
     });
     _finishRequestIfSettled();
@@ -1834,7 +1944,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       return;
     }
     if (!_leavingPage &&
-        (_resumeFilePath != null ||
+        (_resumeTargets.isNotEmpty ||
             _resumeInProgress ||
             _pendingResumeAfterConnect)) {
       // A resume attempt deliberately stops the previous isolate; that
@@ -1898,4 +2008,17 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
     return formatted;
   }
+}
+
+/// 断线续传目标：被中断的单个已发送文件。
+class _ResumeTarget {
+  const _ResumeTarget({
+    required this.path,
+    required this.name,
+    required this.uuid,
+  });
+
+  final String path;
+  final String name;
+  final String uuid;
 }
