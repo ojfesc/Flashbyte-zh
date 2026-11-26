@@ -564,7 +564,7 @@ class DeviceDiscoveryService {
     for (final socket in _sendSockets) {
       try {
         socket.socket.send(encodedPacket, address, port);
-      } on SocketException {
+      } catch (_) {
         // Try every sender socket; the next heartbeat retries failures.
       }
     }
@@ -587,11 +587,11 @@ class DeviceDiscoveryService {
           if (bytesSent > 0) {
             break;
           }
-        } on SocketException catch (e) {
+        } catch (e) {
           // Try every broadcast target; the next heartbeat retries failures.
           if (kDebugMode) {
             debugPrint(
-              '[DISCOVERY] broadcast to ${target.address}:$port failed: ${e.message}',
+              '[DISCOVERY] broadcast to ${target.address}:$port failed: $e',
             );
           }
         }
