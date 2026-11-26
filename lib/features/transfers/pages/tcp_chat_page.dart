@@ -705,11 +705,16 @@ class _TcpChatPageState extends State<TcpChatPage> {
     final l10n = AppLocalizations.of(context);
     if (_requestInTransfer) {
       final allPaused = _allPaused(_requestWidgets);
+      // 对方暂停时本端不能继续，按键置灰；本端暂停时显示“全部继续”。
+      final canResumeAny = _requestWidgets.any(
+        (widget) =>
+            widget.status == TransferStatus.paused && widget.canResume,
+      );
       return _requestButtonRow([
         _requestPrimaryButton(
           icon: allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
           label: allPaused ? l10n.resumeAll : l10n.pauseAll,
-          onPressed: _toggleAllPaused,
+          onPressed: allPaused && !canResumeAny ? null : _toggleAllPaused,
         ),
         _requestSecondaryButton(
           icon: Icons.close_rounded,
@@ -751,7 +756,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
   Widget _requestPrimaryButton({
     required IconData icon,
     required String label,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
   }) {
     return FilledButton.tonalIcon(
       onPressed: onPressed,
@@ -792,14 +797,19 @@ class _TcpChatPageState extends State<TcpChatPage> {
       );
     }
     if (_requestInTransfer) {
+      final allPaused = _allPaused(_requestWidgets);
       return _buildTransferStatusButton(
-        icon: Icons.hourglass_top_rounded,
-        title: l10n.transferInProgress,
-        subtitle: l10n.waitForTransferToFinish,
+        icon: allPaused
+            ? Icons.pause_circle_outline_rounded
+            : Icons.hourglass_top_rounded,
+        title: allPaused ? l10n.transferPaused : l10n.transferInProgress,
+        subtitle: allPaused
+            ? l10n.transferPausedHint
+            : l10n.waitForTransferToFinish,
         disconnected: false,
       );
     }
-    if (_requestBusy || isSharingInProgress) {
+    if (_requestBusy) {
       // 等待接收方批准或等待接收：底部只放请求按键，不显示发送入口。
       return const SizedBox.shrink();
     }
@@ -1224,6 +1234,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
     required bool isReceived,
     bool clipboard = false,
     TransferStatus status = TransferStatus.inProgress,
+    VoidCallback? onAccept,
+    VoidCallback? onDecline,
   }) {
     if (_fileTransferWidgets.value.any((widget) => widget.uuid == uuid)) {
       _fileTransferWidgets.value = [
@@ -1268,8 +1280,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
         onResume: () =>
             SocketService.instance.resumeTransfer(uuid, isReceiver: isReceived),
         onCancel: () => _cancelTransfer(uuid, isReceived: isReceived),
-        onAccept: () => SocketService.instance.acceptTransfer(uuid),
-        onDecline: () => SocketService.instance.declineTransfer(uuid),
+        onAccept: onAccept ?? () => SocketService.instance.acceptTransfer(uuid),
+        onDecline:
+            onDecline ?? () => SocketService.instance.declineTransfer(uuid),
       ),
     ];
   }
@@ -1378,6 +1391,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
   }
 
   /// 取消当前请求里尚未结束的传输；发送方向按用户取消处理。
+  ///
+  /// 点击后立即把卡片标成已取消并收尾，不依赖对端回执，避免界面停在“传输进行中”。
   void _cancelAllTransfers() {
     // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
     SocketService.instance.cancelQueuedSends();
@@ -1388,14 +1403,26 @@ class _TcpChatPageState extends State<TcpChatPage> {
       }
       _cancelTransfer(widget.uuid, isReceived: widget.isReceived);
     }
+    _cancelRequestCards();
   }
 
-  /// 当前请求的文件卡片（按发送顺序）。
+  /// 当前请求的文件卡片：优先按记录的请求 id；记录缺失时退回所有未结束的卡片。
   List<TransferWidget> get _requestWidgets {
     final ids = _requestFileIds.toSet();
-    return [
+    final matched = [
       for (final widget in _fileTransferWidgets.value)
         if (ids.contains(widget.uuid)) widget,
+    ];
+    if (matched.isNotEmpty) {
+      return matched;
+    }
+    return [
+      for (final widget in _fileTransferWidgets.value)
+        if (widget.status == TransferStatus.pending ||
+            widget.status == TransferStatus.queued ||
+            widget.status == TransferStatus.inProgress ||
+            widget.status == TransferStatus.paused)
+          widget,
     ];
   }
 
@@ -1417,10 +1444,22 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   bool get _requestBusy => _requestHasPending || _requestHasActive;
 
-  bool get _requestIsMulti => _requestFileIds.length > 1;
+  bool get _requestIsMulti =>
+      _requestFileIds.length > 1 || _requestWidgets.length > 1;
 
   bool get _requestIsReceiver =>
       _requestWidgets.isNotEmpty && _requestWidgets.first.isReceived;
+
+  /// 请求里第一个待接收/待批准的文件；批量请求用它代表整批。
+  String? get _pendingRequestFileId {
+    for (final widget in _requestWidgets) {
+      if (widget.status == TransferStatus.pending ||
+          widget.status == TransferStatus.queued) {
+        return widget.uuid;
+      }
+    }
+    return _requestFileIds.isEmpty ? null : _requestFileIds.first;
+  }
 
   /// 单文件请求：请求里只有这个文件。
   void _startSingleRequest(String fileId) {
@@ -1437,12 +1476,18 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 请求全部完成或取消后清空，底部恢复发送入口。
   void _finishRequestIfSettled() {
-    if (_requestBusy || _requestFileIds.isEmpty) {
+    if (_requestBusy) {
+      return;
+    }
+    if (_requestFileIds.isEmpty &&
+        !_requestAccepted &&
+        !isSharingInProgress) {
       return;
     }
     setState(() {
       _requestFileIds = [];
       _requestAccepted = false;
+      isSharingInProgress = false;
     });
   }
 
@@ -1473,6 +1518,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       isSharingInProgress = true;
     });
     for (final file in files) {
+      // 批量请求的每张卡片都提供“接收/拒绝”，点哪一张都作用于整批。
       addFileWidget(
         filePath: '',
         fileName: (file['fileName'] as String?) ?? '',
@@ -1480,7 +1526,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
         uuid: file['fileId'] as String,
         isReceived: true,
         clipboard: file['clipboard'] == true,
-        status: TransferStatus.queued,
+        status: TransferStatus.pending,
+        onAccept: _acceptAllRequest,
+        onDecline: _declineAllRequest,
       );
     }
     if (trusted) {
@@ -1494,7 +1542,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
       return;
     }
     _updateTransferStatus(fileId, TransferStatus.cancelled);
-    if (_requestIsMulti && _requestFileIds.first == fileId) {
+    final firstId = _requestFileIds.isEmpty ? null : _requestFileIds.first;
+    if (_requestIsMulti && firstId == fileId) {
       _cancelRequestCards();
       return;
     }
@@ -1503,38 +1552,49 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 接收方“全部接收”：接受批量请求的第一个文件，发送方随后依次发送整批。
   void _acceptAllRequest() {
-    if (_requestFileIds.isEmpty) {
+    final fileId = _pendingRequestFileId;
+    if (fileId == null) {
       return;
     }
     setState(() {
       _requestAccepted = true;
     });
-    SocketService.instance.acceptTransfer(_requestFileIds.first);
+    // 其余待接收卡片转为排队，避免接受后还能重复点“接收”。
+    for (final widget in _requestWidgets) {
+      if (widget.status == TransferStatus.pending) {
+        _updateTransferStatus(widget.uuid, TransferStatus.queued);
+      }
+    }
+    SocketService.instance.acceptTransfer(fileId);
   }
 
-  /// 接收方“全部拒绝”：拒绝第一个文件即可让发送方放弃整批。
+  /// 接收方“全部拒绝”：逐个拒绝整批文件，发送方随之放弃整批。
   void _declineAllRequest() {
-    if (_requestFileIds.isEmpty) {
-      return;
+    final fileIds = [
+      for (final widget in _requestWidgets)
+        if (widget.status == TransferStatus.pending ||
+            widget.status == TransferStatus.queued)
+          widget.uuid,
+    ];
+    final targets = fileIds.isEmpty ? _requestFileIds : fileIds;
+    for (final fileId in targets) {
+      SocketService.instance.declineTransfer(fileId);
     }
-    SocketService.instance.declineTransfer(_requestFileIds.first);
     _cancelRequestCards();
   }
 
-  /// 发送方“取消 / 全部取消”：结束当前请求，整批随之作废。
+  /// 发送方“全部取消”：结束当前请求，整批随之作废。
   void _cancelRequest() {
-    if (_requestFileIds.isEmpty) {
+    if (_pendingRequestFileId == null || !_requestIsMulti) {
       return;
     }
-    SocketService.instance.cancelQueuedSends();
-    _cancelTransfer(_requestFileIds.first, isReceived: false);
-    _cancelRequestCards();
+    _cancelAllTransfers();
   }
 
   /// 把当前请求剩下的卡片标记为已取消，避免界面停在等待状态。
   void _cancelRequestCards() {
-    for (final fileId in _requestFileIds) {
-      _updateTransferStatus(fileId, TransferStatus.cancelled);
+    for (final widget in _requestWidgets) {
+      _updateTransferStatus(widget.uuid, TransferStatus.cancelled);
     }
     setState(() {
       _requestAccepted = false;
