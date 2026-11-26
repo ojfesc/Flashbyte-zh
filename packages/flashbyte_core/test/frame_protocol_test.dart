@@ -144,6 +144,51 @@ void main() {
       expect(isFrameWriterFailed(socket), isTrue);
     });
   });
+
+  group('FrameLimits', () {
+    test('accepts headers inside the protocol limits', () {
+      expect(
+        isFrameHeaderValid(
+          const FrameHeader(
+            headerLength: 64,
+            payloadLength: 1024 * 1024,
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('rejects oversized metadata', () {
+      expect(
+        isFrameHeaderValid(
+          const FrameHeader(
+            headerLength: FrameLimits.maxMetadataBytes + 1,
+            payloadLength: 0,
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('rejects oversized payloads', () {
+      expect(
+        isFrameHeaderValid(
+          const FrameHeader(
+            headerLength: 8,
+            payloadLength: FrameLimits.maxPayloadBytes + 1,
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('buffer reports overflow instead of growing without bound', () {
+      final buffer = SocketReadBuffer();
+      final chunk = Uint8List(FrameLimits.maxBufferedBytes);
+      expect(buffer.add(chunk), isTrue);
+      expect(buffer.add(const [0]), isFalse);
+    });
+  });
 }
 
 class _GuardedMockSocket {
