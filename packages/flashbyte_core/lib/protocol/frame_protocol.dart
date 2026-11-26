@@ -109,6 +109,91 @@ class SocketReadBuffer {
   }
 }
 
+/// Raised when a frame cannot be written to its socket.
+///
+/// The original error is kept in [cause] so callers can distinguish a dead
+/// socket from a transient write failure.
+class FrameWriteException implements Exception {
+  const FrameWriteException(this.cause, [this.stackTrace]);
+
+  final Object cause;
+  final StackTrace? stackTrace;
+
+  @override
+  String toString() => 'FrameWriteException: $cause';
+}
+
+/// Serializes every frame written to one socket.
+///
+/// Dart's socket sink rejects `add` while another `flush` is pending, which is
+/// exactly the window a heartbeat timer used to hit. Frames are therefore
+/// chained on one future: data and control frames keep their order, and a
+/// control frame waits for the in-flight chunk instead of being dropped.
+class _FrameWriter {
+  _FrameWriter(this.socket);
+
+  final dynamic socket;
+  Future<void> _tail = Future<void>.value();
+  Object? _failure;
+
+  Future<void> send(Map<String, dynamic> payload, Uint8List? body) {
+    final failure = _failure;
+    if (failure != null) {
+      return Future<void>.error(FrameWriteException(failure));
+    }
+
+    final header = ByteData(8);
+    final metadata = utf8.encode(jsonEncode(payload));
+    header.setUint32(0, metadata.length, Endian.big);
+    header.setUint32(4, body?.length ?? 0, Endian.big);
+    final headerBytes = header.buffer.asUint8List();
+
+    final next = _tail.then((_) async {
+      final currentFailure = _failure;
+      if (currentFailure != null) {
+        throw FrameWriteException(currentFailure);
+      }
+      try {
+        socket.add(headerBytes);
+        socket.add(metadata);
+        if (body != null && body.isNotEmpty) {
+          socket.add(body);
+        }
+        await socket.flush();
+      } catch (e, st) {
+        _failure = e;
+        throw FrameWriteException(e, st);
+      }
+    });
+
+    // Keep the chain alive after a failure; the next caller still receives the
+    // original error through [send].
+    _tail = next.then<void>((_) {}, onError: (_, __) {});
+    return next;
+  }
+}
+
+final Expando<_FrameWriter> _frameWriters = Expando<_FrameWriter>(
+  'flashbyte-frame-writers',
+);
+
+_FrameWriter _writerFor(dynamic socket) {
+  if (socket == null) {
+    throw const FrameWriteException('Socket is null');
+  }
+  return _frameWriters[socket] ??= _FrameWriter(socket);
+}
+
+/// Whether the socket's frame writer has already failed.
+///
+/// Used by the heartbeat to avoid waiting for a write that can never succeed.
+bool isFrameWriterFailed(dynamic socket) {
+  if (socket == null) {
+    return true;
+  }
+  return _frameWriters[socket]?._failure != null;
+}
+
 /// Encodes and sends a length-prefixed frame over a socket.
 ///
 /// Frame format: [4 bytes metadata length][4 bytes payload length][metadata][payload]
@@ -116,42 +201,13 @@ Future<void> sendSocketFrame(
   dynamic socket,
   Map<String, dynamic> payload, {
   Uint8List? payloadBytes,
-}) async {
-  if (socket == null) {
-    print('[FRAME] sendSocketFrame: socket is null, skipping');
-    return;
-  }
-  try {
-    final header = ByteData(8);
-    final bodyBytes = payloadBytes;
-    final metadataBytes = utf8.encode(jsonEncode(payload));
-    header.setUint32(0, metadataBytes.length, Endian.big);
-    header.setUint32(4, bodyBytes?.length ?? 0, Endian.big);
-    socket.add(header.buffer.asUint8List());
-    socket.add(metadataBytes);
-    if (bodyBytes != null && bodyBytes.isNotEmpty) {
-      socket.add(bodyBytes);
-    }
-    await socket.flush();
-  } catch (e, st) {
-    print('[FRAME] sendSocketFrame ERROR: $e');
-    print('[FRAME] sendSocketFrame STACK: $st');
-  }
+}) {
+  return _writerFor(socket).send(payload, payloadBytes);
 }
 
 /// Sends a control frame (zero-payload frame carrying only metadata).
-void sendControlFrame(dynamic socket, Map<String, dynamic> payload) {
-  try {
-    final payloadBytes = utf8.encode(jsonEncode(payload));
-    final header = ByteData(8);
-    header.setUint32(0, payloadBytes.length, Endian.big);
-    header.setUint32(4, 0, Endian.big);
-    socket.add(header.buffer.asUint8List());
-    socket.add(payloadBytes);
-  } catch (e, st) {
-    print('[FRAME] sendControlFrame ERROR: $e');
-    print('[FRAME] sendControlFrame STACK: $st');
-  }
+Future<void> sendControlFrame(dynamic socket, Map<String, dynamic> payload) {
+  return _writerFor(socket).send(payload, null);
 }
 
 /// Configures a socket for low-latency file transfer.
