@@ -4,13 +4,18 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flashbyte/models/discovered_device.dart';
+import 'package:flashbyte_core/utils/device_name.dart';
 
 class DeviceDiscoveryService {
   DeviceDiscoveryService._();
 
   static final DeviceDiscoveryService instance = DeviceDiscoveryService._();
   static const _protocol = 'flashbyte-discovery-v1';
-  static const _broadcastInterval = Duration(seconds: 2);
+  // 5 秒一次足够：设备 20 秒过期，而新设备靠 probe 立即补齐，没必要每 2 秒广播。
+  static const _broadcastInterval = Duration(seconds: 5);
+  static const int _maxDevices = 64;
+  static const int _maxMessagesPerWindow = 60;
+  static const Duration _rateWindow = Duration(seconds: 1);
   static const _advertiseBurstDelays = [
     Duration(milliseconds: 180),
     Duration(milliseconds: 650),
@@ -32,6 +37,7 @@ class DeviceDiscoveryService {
   final _devicesController =
       StreamController<List<DiscoveredDevice>>.broadcast();
   final Map<String, _SeenDevice> _devices = {};
+  final Map<String, _InboundWindow> _inboundWindows = {};
 
   RawDatagramSocket? _receiveSocket;
   StreamSubscription<RawSocketEvent>? _receiveSubscription;
@@ -254,7 +260,15 @@ class DeviceDiscoveryService {
       return;
     }
 
-    final id = message['id'] as String?;
+    // 局域网里任何主机都能发广播：按来源限速，避免伪造包刷爆列表或抢占 CPU。
+    if (!_allowInbound(sourceAddress.address)) {
+      if (kDebugMode) {
+        debugPrint('[DISCOVERY] dropping burst from ${sourceAddress.address}');
+      }
+      return;
+    }
+
+    final id = _readString(message['id']);
     if (id == null || id == _localDeviceId) {
       return;
     }
@@ -266,28 +280,29 @@ class DeviceDiscoveryService {
 
     if (message['action'] == 'goodbye') {
       final seenDevice = _devices[id];
-      final instanceId = message['instanceId'] as String?;
+      final instanceId = _readString(message['instanceId']);
+      // 没有匹配的实例号就不删：否则任何主机一条广播就能把设备从列表里抹掉。
       if (seenDevice != null &&
-          (seenDevice.instanceId == null ||
-              seenDevice.instanceId == instanceId)) {
+          instanceId != null &&
+          seenDevice.instanceId == instanceId) {
         _devices.remove(id);
         _emitDevices();
       }
       return;
     }
 
-    final name = message['name'] as String?;
-    final port = message['port'] as int?;
-    final usesTls = message['tls'] as bool?;
-    final certificateFingerprint = message['certFingerprint'] as String?;
+    final name = DeviceNameRules.sanitize(_readString(message['name']) ?? '');
+    final port = _readPort(message['port']);
+    final usesTls = message['tls'] is bool ? message['tls'] as bool : null;
+    final certificateFingerprint = _readString(message['certFingerprint']);
     // `cert` is optional for compatibility with older peers that still embed
     // the PEM; fingerprint-based verification is the supported path.
-    final certificatePem = message['cert'] as String?;
-    final instanceId = message['instanceId'] as String?;
-    if (name == null || port == null || usesTls == null) {
+    final certificatePem = _readString(message['cert']);
+    final instanceId = _readString(message['instanceId']);
+    if (name.isEmpty || port == null || usesTls == null) {
       if (kDebugMode) {
         debugPrint(
-          '[DISCOVERY] dropping hello id=$id (missing name/port/tls)',
+          '[DISCOVERY] dropping hello id=$id (missing/invalid name, port or tls)',
         );
       }
       return;
@@ -295,6 +310,12 @@ class DeviceDiscoveryService {
     if (usesTls && certificateFingerprint == null) {
       if (kDebugMode) {
         debugPrint('[DISCOVERY] dropping hello id=$id (tls w/o fingerprint)');
+      }
+      return;
+    }
+    if (_devices.length >= _maxDevices && !_devices.containsKey(id)) {
+      if (kDebugMode) {
+        debugPrint('[DISCOVERY] device list full, dropping hello id=$id');
       }
       return;
     }
@@ -328,6 +349,49 @@ class DeviceDiscoveryService {
     if (!_sameDevice(previousDevice, nextDevice)) {
       _emitDevices();
     }
+  }
+
+  /// Reads a non-empty JSON string, tolerating peers that send other types.
+  static String? _readString(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  /// Reads a TCP port, rejecting anything outside the valid range.
+  static int? _readPort(Object? value) {
+    final port = value is int
+        ? value
+        : value is double && value == value.roundToDouble()
+        ? value.toInt()
+        : null;
+    if (port == null || port < 1 || port > 65535) {
+      return null;
+    }
+    return port;
+  }
+
+  /// Per-source message budget so a single host cannot flood the socket.
+  bool _allowInbound(String address) {
+    final now = DateTime.now();
+    final window = _inboundWindows[address];
+    if (window == null || now.difference(window.startedAt) > _rateWindow) {
+      _inboundWindows[address] = _InboundWindow(startedAt: now);
+      if (_inboundWindows.length > 128) {
+        _inboundWindows.removeWhere(
+          (_, entry) =>
+              now.difference(entry.startedAt) > _rateWindow * 3,
+        );
+      }
+      return true;
+    }
+    if (window.count >= _maxMessagesPerWindow) {
+      return false;
+    }
+    window.count++;
+    return true;
   }
 
   Future<void> _bindReceiveSocket(int port) async {
@@ -651,4 +715,12 @@ class _SeenDevice {
   final DiscoveredDevice device;
   final String? instanceId;
   final DateTime lastSeen;
+}
+
+/// Message budget for one source address inside [_rateWindow].
+class _InboundWindow {
+  _InboundWindow({required this.startedAt});
+
+  final DateTime startedAt;
+  int count = 1;
 }
