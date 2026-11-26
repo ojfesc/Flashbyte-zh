@@ -369,6 +369,9 @@ class AppLocalizations {
   String get statusWaiting => isZh ? '等待中' : 'waiting';
   String get statusCancelled => isZh ? '已取消' : 'cancelled';
   String get statusPaused => isZh ? '已暂停' : 'paused';
+  String get transferPaused => isZh ? '传输已暂停' : 'Transfer paused';
+  String get transferPausedHint =>
+      isZh ? '点“继续”恢复传输' : 'Tap Resume to continue';
   String get statusReceived => isZh ? '已接收' : 'received';
   String get statusSent => isZh ? '已发送' : 'sent';
   String get statusReceiving => isZh ? '接收中' : 'receiving';
@@ -378,7 +381,7 @@ class AppLocalizations {
   String get resumeAll => isZh ? '全部继续' : 'Resume all';
   String get cancelAll => isZh ? '全部取消' : 'Cancel all';
   String get continueAction => isZh ? '继续' : 'Continue';
-  String get accept => isZh ? '接受' : 'Accept';
+  String get accept => isZh ? '接收' : 'Receive';
   String get acceptAll => isZh ? '全部接收' : 'Accept all';
   String get declineAll => isZh ? '全部拒绝' : 'Decline all';
   String get waitingForReceiverToAccept =>
