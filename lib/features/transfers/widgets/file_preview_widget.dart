@@ -352,6 +352,7 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
       final downloadsPath = await AppSettings.getDownloadDirectory();
       final result = await OpenFile.open("$downloadsPath/");
       if (result.type == ResultType.fileNotFound) {
+        if (!mounted) return;
         showScaffoldSnackbar(AppLocalizations.of(context).couldNotOpenFolder);
       }
     }
