@@ -1584,7 +1584,17 @@ class _TcpChatPageState extends State<TcpChatPage> {
     if (uuid == null || progress == null) {
       return;
     }
-    _transferProgress[uuid]?.value = progress.clamp(0.0, 1.0);
+    final notifier = _transferProgress[uuid];
+    if (notifier == null) {
+      return;
+    }
+    final next = progress.clamp(0.0, 1.0);
+    // 发送端估算（已写入 socket）与接收端实测（已落盘）交替到达，两者不同步；
+    // 只接受向前的数值，否则卡片进度条会周期性地倒退再前进。
+    if (next <= notifier.value) {
+      return;
+    }
+    notifier.value = next;
   }
 
   void _disposeTransferProgress(String? uuid) {
