@@ -7,6 +7,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
+import 'package:flashbyte/services/platform/android_storage_service.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte_core/flashbyte_core.dart' as core;
 
@@ -39,6 +40,9 @@ void fileReceiverIsolate(List<Object> args) {
   dynamic clientSocket;
   dynamic serverSocket;
   String? currentDownloadDirectory;
+
+  // 当前连接对外广播的对端信息；改名时需要再次发给已连接的对端。
+  Map<String, dynamic>? localPeerInfoSnapshot;
 
   final Queue<Map<String, dynamic>> commandQueue =
       Queue<Map<String, dynamic>>();
@@ -154,6 +158,7 @@ void fileReceiverIsolate(List<Object> args) {
             'tls': useTLS,
             'certFingerprint': command['certificateFingerprint'],
           };
+          localPeerInfoSnapshot = localPeerInfo;
 
           if (command['mode'] == 'host') {
             SecurityContext? securityContext;
@@ -240,7 +245,11 @@ void fileReceiverIsolate(List<Object> args) {
                   onRemoteTransferDeclined: handleRemoteTransferDeclined,
                 );
               },
-              onError: (error) {},
+              onError: (error) {
+                // 端口被占用、权限不足等问题会走到这里；至少留下日志，
+                // 而不是只表现为“接收服务没有启动”。
+                debugPrint('[SERVER] socket accept error: $error');
+              },
             );
           } else if (command['mode'] == 'client') {
             SecurityContext? securityContext;
@@ -601,6 +610,22 @@ void fileReceiverIsolate(List<Object> args) {
           serverSocket?.close();
         } catch (_) {}
       }
+      // 回执不能省：SocketService.disconnect() 的 future 等这条消息才会完成。
+      toUiSendPort.send({'command': 'disconnect'});
+    } else if (command['command'] == 'update_peer_info') {
+      // 会话中改名：把最新的 peer_info 再发给对端，对方不用重连就能刷新显示名。
+      final snapshot = localPeerInfoSnapshot;
+      final name = core.DeviceNameRules.sanitize(
+        command['deviceName'] as String? ?? '',
+      );
+      if (snapshot != null && name.isNotEmpty) {
+        snapshot['name'] = name;
+        final socket = clientSocket;
+        if (socket != null) {
+          unawaited(core.sendControlFrame(socket, snapshot).catchError((_) {}));
+        }
+      }
+      return;
     } else if (command['command'] == 'pause_transfer') {
       final fileId = command['fileId'] as String?;
       final role = command['role'] as String? ?? 'receiver';
@@ -1019,6 +1044,20 @@ Future<String?> _sendBatchCommand(
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
 
+      // 用户可能在这一批还没轮到这个文件时就单独取消了它：此时不要发 file_start，
+      // 也不要再读盘，直接跳过并通知界面收尾。
+      if (shouldCancelTransfer(fileId)) {
+        await entry.source.dispose();
+        toUiSendPort.send({'status': 'transfer_cancelled', 'fileId': fileId});
+        if (isLast) {
+          toUiSendPort.send({
+            'status': 'transfer_cancel_ready',
+            'fileId': fileId,
+          });
+        }
+        continue;
+      }
+
       toUiSendPort.send({
         'status': 'send_start',
         'fileId': fileId,
@@ -1395,6 +1434,13 @@ void _handleSocketConnection(
   var lastInboundAt = DateTime.now();
   final localUsesTls = localPeerInfo['tls'] == true;
 
+  // 清理长期没人续传的 partial 文件；失败不影响本次连接。
+  unawaited(
+    _cleanupStalePartials(
+      configuredDownloadDirectory: getDownloadDirectory?.call(),
+    ),
+  );
+
   Future<void> cleanupOpenFile() async {
     await activeOutputTarget?.closeWriter();
   }
@@ -1596,11 +1642,12 @@ void _handleSocketConnection(
       case 'pong':
         return true;
       case 'peer_info':
+        final peerName = core.DeviceNameRules.sanitize(
+          headerJson['name'] is String ? headerJson['name'] as String : '',
+        );
         toUiSendPort.send({
           'status': 'peer_info',
-          'name': headerJson['name'] is String
-              ? headerJson['name']
-              : 'Connected device',
+          'name': peerName.isEmpty ? 'Connected device' : peerName,
           'deviceType': headerJson['deviceType'] == 'laptop'
               ? 'laptop'
               : 'phone',
@@ -1811,6 +1858,7 @@ void _handleSocketConnection(
           originalFileName: core.displayFileName(fileName),
           resumeKey: resumeKey,
           startOffset: startOffset,
+          totalBytes: fileSize,
           onWriteError: (e) {
             preservePartialOnDisconnect = false;
             connectionErrorSent = true;
@@ -1917,6 +1965,13 @@ void _handleSocketConnection(
             readBuffer.availableBytes < 8 + frameHeader.headerLength) {
           return;
         }
+        if (!core.isFrameHeaderValid(frameHeader)) {
+          sendConnectionError(
+            'The other device announced a frame that is larger than the transfer protocol allows.',
+          );
+          closeSocket();
+          return;
+        }
 
         readBuffer.skipBytes(8);
         final headerBytes = readBuffer.tryReadBytes(frameHeader.headerLength)!;
@@ -1985,6 +2040,13 @@ void _handleSocketConnection(
           final frameHeader = readBuffer.tryPeekFrameHeader();
           if (frameHeader == null ||
               readBuffer.availableBytes < 8 + frameHeader.headerLength) {
+            return;
+          }
+          if (!core.isFrameHeaderValid(frameHeader)) {
+            sendConnectionError(
+              'The other device announced a frame that is larger than the transfer protocol allows.',
+            );
+            closeSocket();
             return;
           }
 
@@ -2164,7 +2226,14 @@ void _handleSocketConnection(
       lastInboundAt = DateTime.now();
       subscription.pause();
       try {
-        readBuffer.add(data);
+        if (!readBuffer.add(data)) {
+          // 缓冲区超过单帧上限：对端要么声明了非法帧长度，要么一直在灌数据。
+          sendConnectionError(
+            'The other device sent data that is larger than the transfer protocol allows.',
+          );
+          closeSocket();
+          return;
+        }
         await processBufferedFrames();
       } finally {
         if (!socketClosed) {
@@ -2303,6 +2372,60 @@ Future<String> _resolveDownloadDirectory({String? commandDirectory}) async {
   return fallback.path;
 }
 
+/// Formats a byte count for error messages.
+String _formatByteCount(int bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  final text = unit == 0 ? value.toStringAsFixed(0) : value.toStringAsFixed(1);
+  return '$text ${units[unit]}';
+}
+
+/// Deletes partial files that were abandoned by earlier sessions.
+///
+/// A partial file only survives a disconnect so the next connection can resume
+/// it. Files nobody resumed are otherwise never removed and keep occupying
+/// storage forever, so anything older than [_partialMaxAge] is deleted.
+const _partialMaxAge = Duration(days: 7);
+
+Future<void> _cleanupStalePartials({
+  String? configuredDownloadDirectory,
+}) async {
+  try {
+    final resolved = await _resolveDownloadDirectory(
+      commandDirectory: configuredDownloadDirectory,
+    );
+    final directory = Directory(
+      await _partialDirectoryForResolved(resolved),
+    );
+    if (!await directory.exists()) {
+      return;
+    }
+
+    final cutoff = DateTime.now().subtract(_partialMaxAge);
+    await for (final entity in directory.list()) {
+      if (entity is! File || !entity.path.endsWith('.flashbytepart')) {
+        continue;
+      }
+      try {
+        final stat = await entity.stat();
+        if (stat.modified.isBefore(cutoff)) {
+          await entity.delete();
+        }
+      } catch (_) {
+        // A file that is being resumed right now may disappear or be locked;
+        // skipping it is safe, the next session retries.
+      }
+    }
+  } catch (_) {
+    // Cleanup is best effort and must never block a transfer.
+  }
+}
+
 String _resumeKeySegment(String value) {
   final trimmed = value.trim();
   if (trimmed.isEmpty) {
@@ -2358,10 +2481,16 @@ Future<core.OutputTarget> _createOutputTarget({
   required String originalFileName,
   required String resumeKey,
   required int startOffset,
+  required int totalBytes,
   void Function(Object error)? onWriteError,
 }) async {
   var resolvedDirectory = await _resolveDownloadDirectory(
     commandDirectory: configuredDownloadDirectory,
+  );
+
+  final safeOriginalName = core.sanitizeFileName(
+    originalFileName,
+    forWindows: Platform.isWindows,
   );
 
   final usesSaf =
@@ -2387,6 +2516,17 @@ Future<core.OutputTarget> _createOutputTarget({
     if (dirStat == null) {
       throw Exception(
         'Download folder is no longer available. Select a new folder in Settings.',
+      );
+    }
+    // SAF 目标仍然先写应用存储的 partial，再复制进目录；提前检查空间，
+    // 避免大文件传到一半才因为内部存储写满而失败。
+    final availableBytes = await AndroidStorageService.availableBytes();
+    final requiredBytes = totalBytes - startOffset;
+    if (availableBytes != null && requiredBytes > availableBytes) {
+      throw Exception(
+        'Not enough free storage for this file '
+        '(${_formatByteCount(requiredBytes)} needed, '
+        '${_formatByteCount(availableBytes)} available).',
       );
     }
   }
@@ -2427,9 +2567,9 @@ Future<core.OutputTarget> _createOutputTarget({
       ? await _generateSafUniqueFileName(
           saf: Saf(),
           directoryUri: resolvedDirectory,
-          originalFileName: originalFileName,
+          originalFileName: safeOriginalName,
         )
-      : core.generateUniqueFileName(resolvedDirectory, originalFileName);
+      : core.generateUniqueFileName(resolvedDirectory, safeOriginalName);
 
   Future<void> finalize() async {
     if (usesSaf) {
