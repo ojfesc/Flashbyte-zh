@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flashbyte_core/utils/file_utils.dart';
 import 'package:test/test.dart';
 
+String repeat(String unit, int times) => List.filled(times, unit).join();
+
 void main() {
   group('displayFileName', () {
     test('extracts filename from Unix path', () {
@@ -63,6 +65,50 @@ void main() {
       expect(result, 'doc (2).pdf');
     });
   });
+
+  group('sanitizeFileName', () {
+    test('drops directory separators', () {
+      expect(
+        sanitizeFileName('../../etc/passwd', forWindows: false),
+        'passwd',
+      );
+      expect(
+        sanitizeFileName(r'C:\Windows\system32\evil.dll', forWindows: true),
+        'evil.dll',
+      );
+    });
+
+    test('replaces characters Windows rejects', () {
+      expect(
+        sanitizeFileName('report:final?.txt', forWindows: true),
+        'report_final_.txt',
+      );
+    });
+
+    test('prefixes reserved Windows device names', () {
+      expect(sanitizeFileName('CON.txt', forWindows: true), '_CON.txt');
+      expect(sanitizeFileName('nul', forWindows: true), '_nul');
+      expect(sanitizeFileName('console.txt', forWindows: true), 'console.txt');
+    });
+
+    test('removes trailing dots and spaces on Windows only', () {
+      expect(sanitizeFileName('report. ', forWindows: true), 'report');
+      expect(sanitizeFileName('report. ', forWindows: false), 'report.');
+    });
+
+    test('collapses whitespace and falls back for empty names', () {
+      expect(sanitizeFileName('  my   file.pdf  ', forWindows: false), 'my file.pdf');
+      expect(sanitizeFileName('   ', forWindows: false), 'file');
+      expect(sanitizeFileName('..', forWindows: false), 'file');
+    });
+
+    test('truncates long names but keeps the extension', () {
+      final longName = '${repeat('a', 400)}.pdf';
+      final result = sanitizeFileName(longName, forWindows: false);
+      expect(result.endsWith('.pdf'), isTrue);
+      expect(result.length, lessThan(400));
+      expect(result.length, greaterThan(3));
+    });  });
 
   group('clientConnectErrorMessage', () {
     test('formats SocketException', () {
