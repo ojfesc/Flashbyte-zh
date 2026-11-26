@@ -299,6 +299,14 @@ class SocketService {
     });
   }
 
+  /// 通知已连接的对端本机改名，避免对方等到重连才看到新名称。
+  void updateDeviceName(String deviceName) {
+    _toIsolateSendPort?.send({
+      'command': 'update_peer_info',
+      'deviceName': deviceName,
+    });
+  }
+
   void sendFiles(List<String> filePaths) {
     if (_toIsolateSendPort == null || filePaths.isEmpty) {
       return;
@@ -415,8 +423,15 @@ class SocketService {
       });
     } catch (_) {
       stopConnection();
+      return Future.value();
     }
-    return completer.future;
+    // 隔离进程可能已经不再回执（例如 socket 已死）；超时后强制拆除，调用方不会挂起。
+    return completer.future.timeout(
+      const Duration(seconds: 4),
+      onTimeout: () {
+        stopConnection();
+      },
+    );
   }
 
   Future<void> stopConnectionGracefully({
