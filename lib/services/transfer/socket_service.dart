@@ -200,7 +200,9 @@ class SocketService {
         if (status == 'client_connected' || status == 'connected_to_host') {
           _disconnectRequested = false;
           _setConnectionEstablished(true);
-        } else if (status == 'disconnect' || status == 'error') {
+        } else if (status == 'disconnect' ||
+            (status == 'error' && typedMessage['fatal'] == 'true')) {
+          // 只有致命错误代表连接结束；普通操作错误不影响会话状态。
           _setConnectionEstablished(false);
           if (status == 'disconnect') {
             _completeDisconnectWaiter();
@@ -263,7 +265,13 @@ class SocketService {
     }
   }
 
-  void sendFile(String filePath) {
+  /// 发送单个文件。[clipboard] 为 true 时接收端不落盘，而是把内容写进粘贴板。
+  /// [displayName] 覆盖传输中显示的文件名，粘贴板文本用它显示可读名称。
+  void sendFile(
+    String filePath, {
+    String? displayName,
+    bool clipboard = false,
+  }) {
     if (_toIsolateSendPort == null) {
       return;
     }
@@ -271,6 +279,8 @@ class SocketService {
     _toIsolateSendPort!.send({
       'command': 'send_file',
       'filePath': filePath,
+      if (displayName != null) 'displayName': displayName,
+      'clipboard': clipboard,
     });
   }
 
@@ -283,6 +293,23 @@ class SocketService {
       'command': 'send_files',
       'filePaths': filePaths,
     });
+  }
+
+  /// 逐个发送多个文件：每个文件都是独立的单文件请求，不会合并成批量请求。
+  void sendFilesSeparately(List<String> filePaths) {
+    final sendPort = _toIsolateSendPort;
+    if (sendPort == null || filePaths.isEmpty) {
+      return;
+    }
+    sendPort.send({
+      'command': 'send_files_separately',
+      'filePaths': filePaths,
+    });
+  }
+
+  /// 丢弃还没开始发送的排队文件；正在传的文件用 [cancelTransfer] 结束。
+  void cancelQueuedSends() {
+    _toIsolateSendPort?.send({'command': 'cancel_queued_sends'});
   }
 
   void pauseTransfer(String fileId, {required bool isReceiver}) {
@@ -480,8 +507,71 @@ class SocketService {
         latestStatus == 'completed';
   }
 
+  /// 判断传入的文件请求是否已经被拒绝或取消。
+  ///
+  /// 与“已接受”同理：用户可能在通知栏直接拒绝请求，或发送方在另一端取消，
+  /// 而批准页要等应用回到前台才构建，期间的消息它收不到。批准页打开前先按
+  /// 这里记录的最新状态判断请求是否已经结束，已结束就不再显示批准界面。
+  bool isIncomingOfferResolved(String fileId) {
+    final startMessage = _transferStartMessages[fileId];
+    if (startMessage == null) return false;
+
+    final latestStatus = _transferLatestMessages[fileId]?['status'];
+    return latestStatus == 'transfer_cancelled' ||
+        latestStatus == 'transfer_declined';
+  }
+
+  /// 发送方取消请求时，把仍处于待批准状态的传入请求标记为已取消。
+  ///
+  /// 取消帧本身不带文件 id；批准页可能还没构建、收不到后续消息，所以这里
+  /// 把记录里的待批准请求补上结束状态，让批准页打开时能直接关闭。
+  void _markPendingIncomingOffersCancelled() {
+    for (final entry in _transferStartMessages.entries) {
+      final startMessage = entry.value;
+      final isPendingIncoming =
+          startMessage['status'] == 'start' &&
+          startMessage['pendingAcceptance'] == true;
+      if (!isPendingIncoming) continue;
+      if (_transferLatestMessages.containsKey(entry.key)) continue;
+      _transferLatestMessages[entry.key] = {
+        'status': 'transfer_cancelled',
+        'fileId': entry.key,
+      };
+    }
+  }
+
+  /// 记录一次文件请求的开始状态，供批准页在构建时查询请求是否已被处理。
+  ///
+  /// 批量请求的 start 没有顶层 fileId，文件 id 在 files 列表里；按列表里的每个
+  /// id 分别记录，批量请求才能和单个文件一样按 id 查到请求状态。
+  void _recordOfferStart(IsolateMessage message, {required String? fileId}) {
+    final startMessage = Map<String, dynamic>.from(message);
+    final fileIds = <String>{};
+
+    if (fileId != null) {
+      fileIds.add(fileId);
+    } else {
+      final files = message['files'];
+      if (files is List) {
+        for (final file in files) {
+          if (file is Map && file['fileId'] is String) {
+            fileIds.add(file['fileId'] as String);
+          }
+        }
+      }
+    }
+
+    for (final id in fileIds) {
+      _transferStartMessages[id] = startMessage;
+      _transferLatestMessages.remove(id);
+    }
+  }
+
   void _publishMessage(IsolateMessage message) {
     final status = message['status'] ?? message['command'];
+    if (status == 'offer_cancelled_by_sender') {
+      _markPendingIncomingOffersCancelled();
+    }
     if (status == 'peer_info') {
       _connectedPeerInfo = Map<String, dynamic>.from(message);
       unawaited(
@@ -492,22 +582,20 @@ class SocketService {
       );
     }
     final fileId = message['fileId'] as String?;
-    if (fileId != null) {
-      if (status == 'start' || status == 'send_start') {
-        _transferStartMessages[fileId] = Map<String, dynamic>.from(message);
-        _transferLatestMessages.remove(fileId);
-      } else if (status == 'progress' ||
-          status == 'send_progress' ||
-          status == 'completed' ||
-          status == 'send_complete' ||
-          status == 'transfer_paused' ||
-          status == 'transfer_resumed' ||
-          status == 'transfer_pending' ||
-          status == 'transfer_accepted' ||
-          status == 'transfer_declined' ||
-          status == 'transfer_cancelled') {
-        _transferLatestMessages[fileId] = Map<String, dynamic>.from(message);
-      }
+    if (status == 'start' || status == 'send_start') {
+      _recordOfferStart(message, fileId: fileId);
+    } else if (fileId != null &&
+        (status == 'progress' ||
+            status == 'send_progress' ||
+            status == 'completed' ||
+            status == 'send_complete' ||
+            status == 'transfer_paused' ||
+            status == 'transfer_resumed' ||
+            status == 'transfer_pending' ||
+            status == 'transfer_accepted' ||
+            status == 'transfer_declined' ||
+            status == 'transfer_cancelled')) {
+      _transferLatestMessages[fileId] = Map<String, dynamic>.from(message);
     }
 
     _messageStreamController.add(message);

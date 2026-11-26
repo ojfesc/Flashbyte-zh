@@ -11,6 +11,7 @@ import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
@@ -43,6 +44,9 @@ class FileSelectionPage extends StatefulWidget {
 
 enum _ServerNetworkMode { hotspot, wifi, mobile, ethernet, vpn, offline, other }
 
+/// 当前正在打开的选择器；文件与文件夹按钮据此各自显示“正在选择…”。
+enum _PickTarget { files, folder }
+
 class _FileSelectionPageState extends State<FileSelectionPage>
     with TickerProviderStateMixin {
   static const double _wideLayoutBreakpoint = 1000;
@@ -51,13 +55,23 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   static const double _receiverVisualMinHeight = 280;
 
   final TextEditingController _deviceNameController = TextEditingController();
+  final FocusNode _deviceNameFocusNode = FocusNode();
+
+  // 名称输入框是否正在编辑；编辑时右侧按钮显示为保存（勾）。
+  bool _isEditingDeviceName = false;
   final AppMotionController _motionController = AppMotionController.instance;
   final Map<String, AnimationController> _deviceShakeControllers = {};
   List<FastFilePickerPath> selectedFiles = [];
+
+  // 选择列表里来自粘贴板的临时文件路径；发送时据此标记接收端写回粘贴板。
+  final Set<String> _clipboardFilePaths = {};
   late final TabController _tabController;
   late final AnimationController _discoveryRefreshController;
 
-  bool isPickingFile = false;
+  // 正在打开的选择器；null 表示空闲。
+  _PickTarget? _pickingTarget;
+
+  bool get isPickingFile => _pickingTarget != null;
   bool isConnectingToSender = false;
   bool isReceiveStarting = false;
   bool receiveStarted = false;
@@ -81,7 +95,6 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   StreamSubscription<List<DiscoveredDevice>>? _discoverySubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<List<FastFilePickerPath>>? _sharedFilesSubscription;
-  Timer? _nameSaveDebounce;
   Timer? _networkRefreshTimer;
   int _serverRestartGeneration = 0;
   bool _receiveServerIntentionallyStopped = false;
@@ -99,6 +112,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       initialIndex: widget.initialTabIndex,
     );
     _tabController.addListener(_handleTabChanged);
+    _deviceNameFocusNode.addListener(_handleDeviceNameFocusChanged);
     _sharedFilesSubscription = IncomingShareService.instance.sharedFilesStream
         .listen(_appendSharedFiles);
     _discoveryRefreshController = AnimationController(
@@ -145,8 +159,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     _discoverySubscription?.cancel();
     _connectivitySubscription?.cancel();
     _sharedFilesSubscription?.cancel();
-    _nameSaveDebounce?.cancel();
     _networkRefreshTimer?.cancel();
+    _deviceNameFocusNode.removeListener(_handleDeviceNameFocusChanged);
+    _deviceNameFocusNode.dispose();
     _deviceNameController.dispose();
     if (!_exitNotificationSent) {
       unawaited(_notifyFileSelectionExit());
@@ -230,6 +245,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       }
     });
     if (previousNetworkMode != null && previousNetworkMode != nextNetworkMode) {
+      // 网络模式变化会结束当前会话，日志用来核对传输中断的时间点。
+      debugPrint('[NET] ${previousNetworkMode.name} -> ${nextNetworkMode.name}');
       if (nextNetworkMode == _ServerNetworkMode.offline) {
         unawaited(_stopReceiveServerForNetworkLoss());
       } else if (_shouldReconnectServerFor(nextNetworkMode)) {
@@ -402,7 +419,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   Future<void> _pickFiles() async {
     setState(() {
-      isPickingFile = true;
+      _pickingTarget = _PickTarget.files;
     });
 
     try {
@@ -411,11 +428,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
       setState(() {
         selectedFiles = pickedFiles ?? [];
+        _clipboardFilePaths.clear();
       });
     } finally {
       if (mounted) {
         setState(() {
-          isPickingFile = false;
+          _pickingTarget = null;
         });
       }
     }
@@ -423,7 +441,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   Future<void> _pickFolder() async {
     setState(() {
-      isPickingFile = true;
+      _pickingTarget = _PickTarget.folder;
     });
 
     try {
@@ -462,6 +480,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             for (final document in documents)
               FastFilePickerPath.fromUri(document.name, document.uri),
           ];
+          _clipboardFilePaths.clear();
         });
         return;
       }
@@ -508,14 +527,35 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
       setState(() {
         selectedFiles = files;
+        _clipboardFilePaths.clear();
       });
     } finally {
       if (mounted) {
         setState(() {
-          isPickingFile = false;
+          _pickingTarget = null;
         });
       }
     }
+  }
+
+  /// 把粘贴板文本写成临时文件并加入选择列表，发送流程按普通文件处理。
+  Future<void> _pickClipboard() async {
+    final l10n = AppLocalizations.of(context);
+    final file = await createClipboardTextFile();
+    if (!mounted) return;
+    if (file == null) {
+      showScaffoldSnackbar(l10n.clipboardEmpty);
+      return;
+    }
+
+    setState(() {
+      selectedFiles = [
+        FastFilePickerPath.fromPath(l10n.clipboardFileName, file.path),
+      ];
+      _clipboardFilePaths
+        ..clear()
+        ..add(file.path);
+    });
   }
 
   void _handleDroppedFiles(DropDoneDetails details) {
@@ -537,6 +577,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       _isDraggingFilesOverSendCard = false;
       if (droppedFiles.isNotEmpty) {
         selectedFiles = droppedFiles;
+        _clipboardFilePaths.clear();
       }
     });
 
@@ -674,21 +715,23 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     );
   }
 
-  void _scheduleDeviceNameSave(String value) {
-    if (value.isNotEmpty) {
-      setState(() {
-        deviceName = value;
-      });
+  /// 把输入框里的名称保存到设置并刷新广播；空名称恢复为当前名称。
+  Future<void> _persistDeviceNameDraft() async {
+    final name = _deviceNameController.text.trim();
+    if (name.isEmpty) {
+      _deviceNameController.text = deviceName ?? '';
+      return;
     }
-    _nameSaveDebounce?.cancel();
-    _nameSaveDebounce = Timer(
-      const Duration(milliseconds: 400),
-      _saveDeviceName,
-    );
+    if (name == deviceName) {
+      if (_deviceNameController.text != name) {
+        _deviceNameController.text = name;
+      }
+      return;
+    }
+    await _saveDeviceName();
   }
 
   Future<void> _saveDeviceName() async {
-    _nameSaveDebounce?.cancel();
     final name = _deviceNameController.text.trim();
     if (name.isEmpty) {
       return;
@@ -706,19 +749,26 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     DeviceDiscoveryService.instance.requestRefresh();
   }
 
-  Future<void> _generateDeviceName() async {
-    _nameSaveDebounce?.cancel();
-    final name = await AppSettings.generateDeviceName();
-    if (!mounted) return;
+  void _handleDeviceNameFocusChanged() {
+    final focused = _deviceNameFocusNode.hasFocus;
+    if (focused == _isEditingDeviceName) return;
     setState(() {
-      deviceName = name;
-      _deviceNameController.text = name;
+      _isEditingDeviceName = focused;
     });
-    await _refreshAdvertisement();
+    if (!focused) {
+      // 离开输入框时提交草稿，避免未点勾的修改丢失。
+      unawaited(_persistDeviceNameDraft());
+    }
+  }
+
+  /// 保存当前名称并结束编辑；按钮随后按是否为自定义名称恢复为重置或隐藏。
+  Future<void> _commitDeviceName() async {
+    await _persistDeviceNameDraft();
+    if (!mounted) return;
+    _deviceNameFocusNode.unfocus();
   }
 
   Future<void> _resetDeviceName() async {
-    _nameSaveDebounce?.cancel();
     final modelName =
         _deviceModelName ?? await AppSettings.getDeviceModelName();
     await AppSettings.setDeviceName(modelName);
@@ -929,7 +979,12 @@ class _FileSelectionPageState extends State<FileSelectionPage>
         return;
       }
       files = [
-        {'fileId': fileId, 'fileName': fileName, 'fileSize': fileSize},
+        {
+          'fileId': fileId,
+          'fileName': fileName,
+          'fileSize': fileSize,
+          'clipboard': message['clipboard'] == true,
+        },
       ];
     }
 
@@ -1063,17 +1118,36 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       : DiscoveredDeviceType.laptop;
 
   void _sendSelectedFiles() {
-    final paths = <String>[];
+    final l10n = AppLocalizations.of(context);
+    final locations = <String>[];
     for (final pickedFile in selectedFiles) {
       final fileLocation = Platform.isAndroid && pickedFile.uri != null
           ? pickedFile.uri
           : pickedFile.path;
       if (fileLocation != null) {
-        paths.add(fileLocation);
+        locations.add(fileLocation);
       }
     }
-    if (paths.isNotEmpty) {
-      SocketService.instance.sendFiles(paths);
+    if (locations.isEmpty) {
+      return;
+    }
+
+    // 普通文件仍整批发送；混有粘贴板文本时逐个发送，以便单独带上 clipboard 标记。
+    final hasClipboard = locations.any(
+      (location) => _clipboardFilePaths.contains(location),
+    );
+    if (!hasClipboard) {
+      SocketService.instance.sendFiles(locations);
+      return;
+    }
+
+    for (final location in locations) {
+      final isClipboard = _clipboardFilePaths.contains(location);
+      SocketService.instance.sendFile(
+        location,
+        displayName: isClipboard ? l10n.clipboardFileName : null,
+        clipboard: isClipboard,
+      );
     }
   }
 
@@ -1144,19 +1218,23 @@ class _FileSelectionPageState extends State<FileSelectionPage>
             ),
           ],
         ),
-        body: SafeArea(
-          child: useWideLayout
-              ? _buildWideLayout()
-              : ColoredBox(
-                  color: colorScheme.surfaceContainerLowest,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildTabPage(_buildSendTab()),
-                      _buildTabPage(_buildReceiveTab()),
-                    ],
+        body: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          child: SafeArea(
+            child: useWideLayout
+                ? _buildWideLayout()
+                : ColoredBox(
+                    color: colorScheme.surfaceContainerLowest,
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        _buildTabPage(_buildSendTab()),
+                        _buildTabPage(_buildReceiveTab()),
+                      ],
+                    ),
                   ),
-                ),
+          ),
         ),
         bottomNavigationBar: useWideLayout
             ? null
@@ -1985,11 +2063,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                   ),
                   TextField(
                     controller: _deviceNameController,
+                    focusNode: _deviceNameFocusNode,
                     enabled: deviceName != null && !_settingsLocked,
-                    onChanged: _scheduleDeviceNameSave,
-                    onSubmitted: (_) => _saveDeviceName(),
-                    onTapOutside: (_) =>
-                        FocusManager.instance.primaryFocus?.unfocus(),
+                    onSubmitted: (_) => _commitDeviceName(),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer,
                     ),
@@ -2011,25 +2087,30 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                 ],
               ),
             ),
-            if (_isCustomDeviceName())
-              IconButton(
-                tooltip: l10n.resetToDeviceName,
-                onPressed: _settingsLocked ? null : _resetDeviceName,
-                icon: const Icon(Icons.close_rounded),
-                color: colorScheme.onPrimaryContainer,
-                style: IconButton.styleFrom(
-                  minimumSize: const Size.square(44),
+            if (_isEditingDeviceName)
+              ExcludeFocus(
+                child: IconButton(
+                  tooltip: l10n.save,
+                  onPressed: _settingsLocked ? null : _commitDeviceName,
+                  icon: const Icon(Icons.check_rounded),
+                  color: colorScheme.onPrimaryContainer,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(44),
+                  ),
+                ),
+              )
+            else if (_isCustomDeviceName())
+              ExcludeFocus(
+                child: IconButton(
+                  tooltip: l10n.resetToDeviceName,
+                  onPressed: _settingsLocked ? null : _resetDeviceName,
+                  icon: const Icon(Icons.restart_alt_rounded),
+                  color: colorScheme.onPrimaryContainer,
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size.square(44),
+                  ),
                 ),
               ),
-            IconButton(
-              tooltip: l10n.generateNewName,
-              onPressed: _settingsLocked ? null : _generateDeviceName,
-              icon: const Icon(Icons.refresh_rounded),
-              color: colorScheme.onPrimaryContainer,
-              style: IconButton.styleFrom(
-                minimumSize: const Size.square(44),
-              ),
-            ),
           ],
         ),
       ),
@@ -2202,6 +2283,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                     : () {
                         setState(() {
                           selectedFiles = [];
+                          _clipboardFilePaths.clear();
                         });
                       },
                 icon: const Icon(Icons.close_rounded),
@@ -2226,117 +2308,100 @@ class _FileSelectionPageState extends State<FileSelectionPage>
           borderRadius: BorderRadius.circular(20),
           child: Row(
             children: [
-              Expanded(
-                flex: 3,
-                child: Material(
-                  color: selectedFiles.isEmpty
-                      ? colorScheme.primaryContainer
-                      : colorScheme.surfaceContainerHighest,
-                  borderRadius: const BorderRadius.horizontal(
-                    left: Radius.circular(20),
-                  ),
-                  child: InkWell(
-                    onTap: isPickingFile || isConnectingToSender
-                        ? null
-                        : _pickFiles,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 58),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          spacing: 10,
-                          children: [
-                            Icon(
-                              selectedFiles.isEmpty
-                                  ? Icons.file_present_rounded
-                                  : Icons.swap_horiz_rounded,
-                              color: selectedFiles.isEmpty
-                                  ? colorScheme.onPrimaryContainer
-                                  : colorScheme.onSurfaceVariant,
-                            ),
-                            Text(
-                              isPickingFile
-                                  ? l10n.picking
-                                  : selectedFiles.isEmpty
-                                  ? l10n.pickFiles
-                                  : l10n.changeFiles,
-                              style: Theme.of(context).textTheme.labelLarge
-                                  ?.copyWith(
-                                    color: selectedFiles.isEmpty
-                                        ? colorScheme.onPrimaryContainer
-                                        : colorScheme.onSurface,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Container(
-                width: 1,
-                height: 58,
-                color: selectedFiles.isEmpty
-                    ? colorScheme.onPrimaryContainer.withValues(alpha: 0.15)
-                    : colorScheme.onSurfaceVariant.withValues(alpha: 0.15),
-              ),
-              Expanded(
+              _buildSelectionAction(
+                icon: Icons.content_paste_rounded,
+                label: l10n.clipboard,
                 flex: 1,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 100),
-                  child: Material(
-                    color: selectedFiles.isEmpty
-                        ? colorScheme.primaryContainer
-                        : colorScheme.surfaceContainerHighest,
-                    borderRadius: const BorderRadius.horizontal(
-                      right: Radius.circular(20),
-                    ),
-                    child: InkWell(
-                      onTap: isPickingFile || isConnectingToSender
-                          ? null
-                          : _pickFolder,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(minHeight: 58),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            spacing: 6,
-                            children: [
-                              Icon(
-                                Icons.folder_open_rounded,
-                                size: 20,
-                                color: selectedFiles.isEmpty
-                                    ? colorScheme.onPrimaryContainer
-                                    : colorScheme.onSurfaceVariant,
-                              ),
-                              Text(
-                                l10n.folder,
-                                style: Theme.of(context).textTheme.labelSmall
-                                    ?.copyWith(
-                                      color: selectedFiles.isEmpty
-                                          ? colorScheme.onPrimaryContainer
-                                          : colorScheme.onSurface,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+                borderRadius: const BorderRadius.horizontal(
+                  left: Radius.circular(20),
                 ),
+                onTap: _pickClipboard,
+              ),
+              _buildSelectionActionDivider(colorScheme),
+              _buildSelectionAction(
+                icon: Icons.file_present_rounded,
+                label: _pickingTarget == _PickTarget.files
+                    ? l10n.picking
+                    : l10n.file,
+                flex: 1,
+                borderRadius: BorderRadius.zero,
+                onTap: _pickFiles,
+              ),
+              _buildSelectionActionDivider(colorScheme),
+              _buildSelectionAction(
+                icon: Icons.folder_open_rounded,
+                label: _pickingTarget == _PickTarget.folder
+                    ? l10n.picking
+                    : l10n.folder,
+                flex: 1,
+                borderRadius: const BorderRadius.horizontal(
+                  right: Radius.circular(20),
+                ),
+                onTap: _pickFolder,
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  /// 发送方式按钮：粘贴板 / 文件 / 文件夹，选中文件后也保持同一配色。
+  Widget _buildSelectionAction({
+    required IconData icon,
+    required String label,
+    required int flex,
+    required BorderRadius borderRadius,
+    required VoidCallback onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final disabled = isPickingFile || isConnectingToSender;
+
+    return Expanded(
+      flex: flex,
+      child: Material(
+        color: colorScheme.primaryContainer,
+        borderRadius: borderRadius,
+        child: InkWell(
+          onTap: disabled ? null : onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 58),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                spacing: 6,
+                children: [
+                  Icon(
+                    icon,
+                    size: 20,
+                    color: colorScheme.onPrimaryContainer,
+                  ),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectionActionDivider(ColorScheme colorScheme) {
+    return Container(
+      width: 1,
+      height: 58,
+      color: colorScheme.onPrimaryContainer.withValues(alpha: 0.15),
     );
   }
 

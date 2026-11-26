@@ -22,6 +22,9 @@ class TransferWidget extends StatelessWidget {
 
   final bool isReceived;
 
+  /// 粘贴板传输：内容不在磁盘上，不能打开文件预览。
+  final bool clipboard;
+
   final String uuid;
 
   final ValueListenable<double>? value;
@@ -38,6 +41,7 @@ class TransferWidget extends StatelessWidget {
     required this.fileName,
     required this.fileSize,
     this.isReceived = true,
+    this.clipboard = false,
     this.value,
     required this.uuid,
     required this.filePath,
@@ -101,7 +105,7 @@ class TransferWidget extends StatelessWidget {
                   borderRadius: BorderRadiusGeometry.circular(13),
                 ),
                 onTap: () {
-                  if (isCancelled || isPending || isQueued) return;
+                  if (isCancelled || isPending || isQueued || clipboard) return;
                   openFilePreview(context);
                 },
                 contentPadding: EdgeInsets.symmetric(
@@ -110,7 +114,13 @@ class TransferWidget extends StatelessWidget {
                 ),
                 leading: SizedBox(
                   height: double.infinity,
-                  child: FittedBox(child: Icon(Icons.file_copy)),
+                  child: FittedBox(
+                    child: Icon(
+                      clipboard
+                          ? Icons.content_paste_rounded
+                          : Icons.file_copy,
+                    ),
+                  ),
                 ),
                 title: Row(
                   children: [
@@ -242,6 +252,9 @@ class TransferWidget extends StatelessWidget {
   }
 
   void openFilePreview(BuildContext context) {
+    if (clipboard) {
+      return;
+    }
     Navigator.push(
       context,
       HeroDialogRoute(

@@ -26,9 +26,17 @@ class AppLocalizations {
   String get languageEnglish => isZh ? '英文' : 'English';
   String get dismiss => isZh ? '关闭' : 'Dismiss';
   String get cancel => isZh ? '取消' : 'Cancel';
+  String get save => isZh ? '保存' : 'Save';
   String get backToFileSelection =>
       isZh ? '返回文件选择' : 'Back to file selection';
   String get unknownDevice => isZh ? '未知设备' : 'Unknown device';
+
+  // 粘贴板发送
+  String get clipboard => isZh ? '粘贴板' : 'Clipboard';
+  String get file => isZh ? '文件' : 'File';
+  String get clipboardFileName => isZh ? '粘贴板文本.txt' : 'Clipboard.txt';
+  String get clipboardEmpty =>
+      isZh ? '粘贴板没有可发送的文本。' : 'The clipboard has no text to send.';
 
   // 主页
   String get localFileSharing => isZh ? '本地文件分享' : 'Local file sharing';
@@ -333,6 +341,8 @@ class AppLocalizations {
   String get phoneOrTablet => isZh ? '手机或平板' : 'Phone or tablet';
   String get unknownValue => isZh ? '未知' : 'Unknown';
   String get connectionLost => isZh ? '连接已断开' : 'Connection lost';
+  String get transferInterrupted =>
+      isZh ? '传输被中断' : 'Transfer interrupted';
   String get pickFile => isZh ? '选择文件' : 'Pick File';
   String get reconnectToSendMore =>
       isZh ? '重新连接以继续发送' : 'Reconnect to send more files';
@@ -343,11 +353,6 @@ class AppLocalizations {
       isZh ? '选择另一个要发送的文件' : 'Choose another file to send';
   String get couldNotReadSelectedFile =>
       isZh ? '无法读取所选文件' : 'Could not read selected file';
-  String get connectionLostDialog =>
-      isZh ? '连接已断开' : 'Connection Lost';
-  String get connectionLostDuringTransfer => isZh
-      ? '连接已断开。另一台设备在传输过程中断开连接。'
-      : 'Connection lost. The other device disconnected during the transfer.';
   String get disconnectedSnackbar => isZh ? '已断开' : 'Disconnected';
   String get couldNotSendSharedFiles => isZh
       ? '连接已断开——无法发送共享文件'
@@ -369,6 +374,9 @@ class AppLocalizations {
   String get statusReceiving => isZh ? '接收中' : 'receiving';
   String get statusSending => isZh ? '发送中' : 'sending';
   String get pause => isZh ? '暂停' : 'Pause';
+  String get pauseAll => isZh ? '全部暂停' : 'Pause all';
+  String get resumeAll => isZh ? '全部继续' : 'Resume all';
+  String get cancelAll => isZh ? '全部取消' : 'Cancel all';
   String get continueAction => isZh ? '继续' : 'Continue';
   String get accept => isZh ? '接受' : 'Accept';
   String get waitingForReceiverToAccept =>

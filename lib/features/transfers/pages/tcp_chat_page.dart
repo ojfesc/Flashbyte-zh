@@ -5,12 +5,16 @@ import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
+import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
-import 'package:flashbyte/models/user_facing_error.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flashbyte/features/transfers/widgets/transfer_widget.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+
+/// 会话异常结束的两种结果；底部发送入口按它选择显示的文案和图标。
+enum _SessionIssue { connectionLost, transferInterrupted }
 
 class TcpChatPage extends StatefulWidget {
   final List<FastFilePickerPath> initialFiles;
@@ -43,10 +47,11 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   bool isSharingInProgress = false;
   bool _sentInitialFiles = false;
-  bool _errorDialogVisible = false;
   bool _disconnectSignalSent = false;
   bool _leavingPage = false;
   bool _suppressNextConnectionIssueAfterCancellation = false;
+  bool _fatalErrorReceived = false;
+  _SessionIssue? _sessionIssue;
   Map<String, dynamic>? _peerInfo;
 
   StreamSubscription? _streamSubscription;
@@ -68,9 +73,18 @@ class _TcpChatPageState extends State<TcpChatPage> {
             );
             return;
           }
+          final locations = <String>[];
           for (final file in batch) {
-            _sendPickedFile(file);
+            final location = _pickedFileLocation(file);
+            if (location != null) locations.add(location);
           }
+          if (locations.isEmpty) {
+            showScaffoldSnackbar(
+              AppLocalizations.of(context).couldNotReadSelectedFile,
+            );
+            return;
+          }
+          SocketService.instance.sendFilesSeparately(locations);
           final l10n = AppLocalizations.of(context);
           final peerName = _peerName(context);
           showScaffoldSnackbar(
@@ -127,6 +141,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 ),
                 uuid: fileId,
                 isReceived: true,
+                clipboard: message['clipboard'] == true,
                 status: TransferStatus.pending,
               );
               break;
@@ -141,6 +156,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
               fileSize: sizeConvert((message['fileSize'] as int).toDouble()),
               uuid: fileId,
               isReceived: true,
+              clipboard: message['clipboard'] == true,
               status: TransferStatus.inProgress,
             );
             break;
@@ -190,6 +206,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 (message['fileSize'] as int?)?.toDouble() ?? 0,
               ),
               isReceived: false,
+              clipboard: message['clipboard'] == true,
               status: transferStatus,
             );
             break;
@@ -250,8 +267,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 message['message'] as String? ??
                 AppLocalizations.of(context).unknownError;
             if (isFatal) {
-              _showErrorAfterCancellationWindow(errorText);
-            } else {
+              // 致命错误不再弹窗，只按会话结束处理；原因写进日志便于排查。
+              debugPrint('[SESSION] fatal error: $errorText');
+              _fatalErrorReceived = true;
+              _reportSessionIssueAfterCancellationWindow();
+            } else if (!_fatalErrorReceived) {
+              // 会话已经因致命错误结束时，逐文件上报的普通错误不再重复提示。
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -393,10 +414,20 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                   Expanded(
                                     child: ValueListenableBuilder(
                                       valueListenable: isDisconnected,
-                                      builder: (context, value, child) =>
-                                          _buildPickFileButton(
+                                      builder: (context, value, child) => Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        spacing: 10,
+                                        children: [
+                                          // 传输中在状态按键上方提供整批操作。
+                                          if (!value && isSharingInProgress)
+                                            _buildBatchTransferControls(),
+                                          _buildTransferActions(
                                             isConnectionLost: value,
                                           ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -619,93 +650,197 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  Widget _buildPickFileButton({required bool isConnectionLost}) {
-    final l10n = AppLocalizations.of(context);
-    final colorScheme = Theme.of(context).colorScheme;
-    final disabledColor = colorScheme.onSurfaceVariant;
-    final disabled = isConnectionLost || isSharingInProgress;
-    final title = isConnectionLost
-        ? l10n.connectionLost
-        : isSharingInProgress
-        ? l10n.transferInProgress
-        : l10n.pickFile;
-    final subtitle = isConnectionLost
-        ? l10n.reconnectToSendMore
-        : isSharingInProgress
-        ? l10n.waitForTransferToFinish
-        : l10n.chooseAnotherFile;
-    final icon = isConnectionLost
-        ? Icons.link_off_rounded
-        : isSharingInProgress
-        ? Icons.hourglass_top_rounded
-        : Icons.file_present_rounded;
-
-    return Card(
-      margin: EdgeInsets.zero,
-      color: isConnectionLost
-          ? colorScheme.surfaceContainerHighest
-          : colorScheme.surfaceContainerHighest,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isConnectionLost
-              ? colorScheme.outlineVariant
-              : Colors.transparent,
-        ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: disabled
-            ? null
-            : () async {
-                final pickedFile = await FastFilePicker.pickFile();
-                if (pickedFile == null) {
-                  return;
-                }
-                _sendPickedFile(pickedFile);
-              },
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-          child: Row(
-            spacing: 12,
-            children: [
-              AnimatedSwitcher(
-                duration: 180.ms,
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                child: Icon(
-                  icon,
-                  key: ValueKey(icon),
-                  color: isConnectionLost ? disabledColor : colorScheme.primary,
+  /// 传输中显示的整批操作：全部暂停（全部暂停后变为全部继续）、全部取消。
+  Widget _buildBatchTransferControls() {
+    return ValueListenableBuilder<List<TransferWidget>>(
+      valueListenable: _fileTransferWidgets,
+      builder: (context, widgets, child) {
+        final l10n = AppLocalizations.of(context);
+        final allPaused = _allPaused(widgets);
+        return Row(
+          spacing: 10,
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: _toggleAllPaused,
+                icon: Icon(
+                  allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                ),
+                label: Text(allPaused ? l10n.resumeAll : l10n.pauseAll),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
                 ),
               ),
-              Expanded(
+            ),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _cancelAllTransfers,
+                icon: const Icon(Icons.close_rounded),
+                label: Text(l10n.cancelAll),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(44),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 空闲时显示三个发送入口；传输中或连接断开时显示一个不可点击的状态按键。
+  ///
+  /// 连接断开后按键直接显示结果：打断过未完成的传输时显示“传输被中断”，
+  /// 传输都已结束时显示“连接已断开”。
+  Widget _buildTransferActions({required bool isConnectionLost}) {
+    final l10n = AppLocalizations.of(context);
+    if (isConnectionLost || isSharingInProgress) {
+      final interrupted =
+          isConnectionLost &&
+          _sessionIssue == _SessionIssue.transferInterrupted;
+      final icon = isConnectionLost
+          ? interrupted
+              ? Icons.sync_problem_rounded
+              : Icons.link_off_rounded
+          : Icons.hourglass_top_rounded;
+      final title = isConnectionLost
+          ? interrupted
+              ? l10n.transferInterrupted
+              : l10n.connectionLost
+          : l10n.transferInProgress;
+      return _buildTransferStatusButton(
+        icon: icon,
+        title: title,
+        subtitle: isConnectionLost
+            ? l10n.reconnectToSendMore
+            : l10n.waitForTransferToFinish,
+        disconnected: isConnectionLost,
+      );
+    }
+
+    final colorScheme = Theme.of(context).colorScheme;
+
+    Widget action({
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+    }) {
+      return Expanded(
+        child: Card(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: colorScheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 62),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  spacing: 2,
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 4,
                   children: [
+                    Icon(icon, size: 22, color: colorScheme.primary),
                     Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: isConnectionLost
-                            ? disabledColor
-                            : colorScheme.onSurface,
-                      ),
-                    ),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: isConnectionLost
-                            ? disabledColor
-                            : colorScheme.onSurfaceVariant,
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: colorScheme.onSurface,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        action(
+          icon: Icons.content_paste_rounded,
+          label: l10n.clipboard,
+          onTap: _sendClipboard,
+        ),
+        const SizedBox(width: 8),
+        action(
+          icon: Icons.file_present_rounded,
+          label: l10n.file,
+          onTap: _pickFilesToSend,
+        ),
+        const SizedBox(width: 8),
+        action(
+          icon: Icons.folder_open_rounded,
+          label: l10n.folder,
+          onTap: _sendFolder,
+        ),
+      ],
+    );
+  }
+
+  /// 传输中或连接断开时替代三个入口的状态按键，不可点击。
+  Widget _buildTransferStatusButton({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool disconnected,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: disconnected ? colorScheme.outlineVariant : Colors.transparent,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+        child: Row(
+          spacing: 12,
+          children: [
+            Icon(
+              icon,
+              color: disconnected
+                  ? colorScheme.onSurfaceVariant
+                  : colorScheme.primary,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 2,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: disconnected
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -729,9 +864,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
 
     _sentInitialFiles = true;
+    final locations = <String>[];
     for (final file in widget.initialFiles) {
-      _sendPickedFile(file);
+      final location = _pickedFileLocation(file);
+      if (location != null) locations.add(location);
     }
+    SocketService.instance.sendFilesSeparately(locations);
   }
 
   String _peerName(BuildContext context) {
@@ -741,97 +879,128 @@ class _TcpChatPageState extends State<TcpChatPage> {
         : name;
   }
 
-  void _sendPickedFile(FastFilePickerPath pickedFile) {
-    final fileLocation = Platform.isAndroid && pickedFile.uri != null
+  /// 选择器返回的路径转换成传输层可用的位置：Android 用 SAF 的 content://，其余用文件路径。
+  String? _pickedFileLocation(FastFilePickerPath pickedFile) {
+    return Platform.isAndroid && pickedFile.uri != null
         ? pickedFile.uri
         : pickedFile.path;
+  }
 
-    if (fileLocation == null) {
+  /// 多选文件后逐个排队发送；每个文件都是独立的单文件请求。
+  Future<void> _pickFilesToSend() async {
+    final pickedFiles = await FastFilePicker.pickMultipleFiles();
+    if (!mounted || pickedFiles == null || pickedFiles.isEmpty) return;
+
+    final locations = <String>[];
+    for (final pickedFile in pickedFiles) {
+      final location = _pickedFileLocation(pickedFile);
+      if (location != null) locations.add(location);
+    }
+    if (locations.isEmpty) {
       showScaffoldSnackbar(
         AppLocalizations.of(context).couldNotReadSelectedFile,
       );
       return;
     }
-
-    SocketService.instance.sendFile(fileLocation);
+    SocketService.instance.sendFilesSeparately(locations);
   }
 
-  void _showConnectionIssueDialog({required String message}) {
-    if (_errorDialogVisible || !mounted) {
+  /// 把粘贴板文本写成临时文件后按普通文件发送，接收端会写回粘贴板。
+  Future<void> _sendClipboard() async {
+    final l10n = AppLocalizations.of(context);
+    final file = await createClipboardTextFile();
+    if (!mounted) return;
+    if (file == null) {
+      showScaffoldSnackbar(l10n.clipboardEmpty);
       return;
     }
-    final l10n = AppLocalizations.of(context);
-    final error = UserFacingError.from(message);
-    final displayMessage = l10n.localizeError(error.message);
-    final colorScheme = Theme.of(context).colorScheme;
-
-    setState(() {
-      isSharingInProgress = false;
-    });
-    isDisconnected.value = true;
-    _errorDialogVisible = true;
-
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: "Close Dialog",
-      pageBuilder: (context, animation, secondaryAnimation) => AlertDialog(
-        title: Row(
-          spacing: 10,
-          children: [
-            Icon(
-              Icons.error_rounded,
-              color: colorScheme.onErrorContainer,
-            ),
-            Text(l10n.connectionLostDialog),
-          ],
-        ),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          spacing: 10,
-          children: [
-            Text(displayMessage),
-            if (error.hasDetails)
-              Card(
-                margin: EdgeInsets.zero,
-                color: colorScheme.surfaceContainerHighest,
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    child: SingleChildScrollView(
-                      child: SelectableText(
-                        error.details!,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    ).then((_) {
-      _errorDialogVisible = false;
-    });
+    SocketService.instance.sendFile(
+      file.path,
+      displayName: l10n.clipboardFileName,
+      clipboard: true,
+    );
   }
 
-  void _scrollToBottom() {
-    if (scrollController.hasClients) {
-      Future.delayed(500.ms).then(
-        (value) {
-          scrollController.animateTo(
-            scrollController.position.minScrollExtent,
-            duration: const Duration(milliseconds: 1000),
-            curve: Curves.easeOutCirc,
-          );
-        },
+  /// 选择文件夹并把其中所有文件逐个加入发送队列。
+  Future<void> _sendFolder() async {
+    final l10n = AppLocalizations.of(context);
+    try {
+      if (Platform.isAndroid) {
+        final pickedDirectory = await AndroidSafService.pickDirectory(
+          writePermission: false,
+        );
+        if (pickedDirectory == null) return;
+        final documents = await AndroidSafService.listFilesUnder(
+          pickedDirectory.uri,
+        );
+        if (!mounted) return;
+        if (documents.isEmpty) {
+          showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
+          return;
+        }
+        SocketService.instance.sendFilesSeparately([
+          for (final document in documents) document.uri,
+        ]);
+        return;
+      }
+
+      final pickedFolder = await FastFilePicker.pickFolder(
+        writePermission: false,
       );
+      final folderPath = pickedFolder?.path;
+      if (folderPath == null || folderPath.isEmpty) return;
+      final directory = Directory(folderPath);
+      if (!await directory.exists()) {
+        if (mounted) {
+          showScaffoldSnackbar(l10n.folderNotFound);
+        }
+        return;
+      }
+
+      final paths = <String>[];
+      await for (final entity in directory.list(recursive: true)) {
+        if (entity is File) {
+          paths.add(entity.path);
+        }
+      }
+      if (paths.isEmpty) {
+        if (mounted) {
+          showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
+        }
+        return;
+      }
+      SocketService.instance.sendFilesSeparately(paths);
+    } catch (_) {
+      if (mounted) {
+        showScaffoldSnackbar(l10n.cannotReadFolder);
+      }
     }
+  }
+
+  /// 列表里是否还有没结束的传输（排队、待批准、传输中或已暂停）。
+  bool _hasUnfinishedTransfers() {
+    return _fileTransferWidgets.value.any(
+      (widget) =>
+          widget.status != TransferStatus.completed &&
+          widget.status != TransferStatus.cancelled,
+    );
+  }
+
+  /// 记录会话异常结束，底部发送入口据此显示断开原因。
+  ///
+  /// 仍有未结束的传输时说明这次断开打断了传输；传输都已完成或取消时，
+  /// 只是连接断开。结果只记一次，之后重复的断开不再改变显示。
+  void _reportSessionIssue() {
+    if (!mounted) return;
+
+    final interrupted = isSharingInProgress || _hasUnfinishedTransfers();
+    setState(() {
+      isSharingInProgress = false;
+      _sessionIssue ??= interrupted
+          ? _SessionIssue.transferInterrupted
+          : _SessionIssue.connectionLost;
+    });
+    isDisconnected.value = true;
   }
 
   void replaceTransferWidget({
@@ -852,6 +1021,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           fileName: fileName ?? widget.fileName,
           fileSize: widget.fileSize,
           isReceived: widget.isReceived,
+          clipboard: widget.clipboard,
           uuid: widget.uuid,
           value: null,
           status: TransferStatus.completed,
@@ -931,6 +1101,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         fileSize: sizeConvert(fileSize.toDouble()),
         value: progress,
         isReceived: true,
+        clipboard: file['clipboard'] == true,
         uuid: uuid,
         status: TransferStatus.queued,
         canResume: true,
@@ -951,9 +1122,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
     required String fileSize,
     required String filePath,
     required bool isReceived,
+    bool clipboard = false,
     TransferStatus status = TransferStatus.inProgress,
   }) {
-    _scrollToBottom();
     if (_fileTransferWidgets.value.any((widget) => widget.uuid == uuid)) {
       _fileTransferWidgets.value = [
         for (final widget in _fileTransferWidgets.value)
@@ -988,6 +1159,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         fileSize: fileSize,
         value: progress,
         isReceived: isReceived,
+        clipboard: clipboard,
         uuid: uuid,
         status: hadPendingStatus ? pendingStatus : status,
         canResume: pendingCanResume,
@@ -1038,6 +1210,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       fileName: fileName ?? widget.fileName,
       fileSize: widget.fileSize,
       isReceived: widget.isReceived,
+      clipboard: widget.clipboard,
       uuid: widget.uuid,
       value: value,
       status: status,
@@ -1068,6 +1241,55 @@ class _TcpChatPageState extends State<TcpChatPage> {
     SocketService.instance.cancelTransfer(fileId);
   }
 
+  /// 未结束的传输是否全部处于暂停状态。
+  bool _allPaused(List<TransferWidget> widgets) {
+    final active = widgets.where(
+      (widget) =>
+          widget.status != TransferStatus.completed &&
+          widget.status != TransferStatus.cancelled,
+    );
+    return active.isNotEmpty &&
+        active.every((widget) => widget.status == TransferStatus.paused);
+  }
+
+  /// 全部暂停与全部继续的切换，按钮文案由 [_allPaused] 决定。
+  void _toggleAllPaused() {
+    final widgets = _fileTransferWidgets.value;
+    final resume = _allPaused(widgets);
+    for (final widget in widgets) {
+      if (widget.status == TransferStatus.completed ||
+          widget.status == TransferStatus.cancelled) {
+        continue;
+      }
+      if (resume) {
+        if (widget.status != TransferStatus.paused) continue;
+        SocketService.instance.resumeTransfer(
+          widget.uuid,
+          isReceiver: widget.isReceived,
+        );
+      } else {
+        if (widget.status == TransferStatus.paused) continue;
+        SocketService.instance.pauseTransfer(
+          widget.uuid,
+          isReceiver: widget.isReceived,
+        );
+      }
+    }
+  }
+
+  /// 取消所有尚未结束的传输；发送方向按用户取消处理，避免被当成连接异常。
+  void _cancelAllTransfers() {
+    // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
+    SocketService.instance.cancelQueuedSends();
+    for (final widget in _fileTransferWidgets.value) {
+      if (widget.status == TransferStatus.completed ||
+          widget.status == TransferStatus.cancelled) {
+        continue;
+      }
+      _cancelTransfer(widget.uuid, isReceived: widget.isReceived);
+    }
+  }
+
   Future<void> _handleDisconnectAfterCancellationWindow() async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted || _suppressNextConnectionIssueAfterCancellation) {
@@ -1077,9 +1299,9 @@ class _TcpChatPageState extends State<TcpChatPage> {
       return;
     }
     if (!_leavingPage && isSharingInProgress) {
-      _showConnectionIssueDialog(
-        message: AppLocalizations.of(context).connectionLostDuringTransfer,
-      );
+      // 传输中被主动断开：日志用来区分“有人调用了断开”和“心跳/写失败”。
+      debugPrint('[SESSION] disconnect while transferring');
+      _reportSessionIssue();
     } else if (!_leavingPage) {
       Navigator.pop(context);
       showScaffoldSnackbar(
@@ -1088,14 +1310,15 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
-  Future<void> _showErrorAfterCancellationWindow(String message) async {
+  /// 用户主动取消后的宽限期内不报异常，避免把取消引起的断开算成传输中断。
+  Future<void> _reportSessionIssueAfterCancellationWindow() async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted ||
         _disconnectSignalSent ||
         _suppressNextConnectionIssueAfterCancellation) {
       return;
     }
-    _showConnectionIssueDialog(message: message);
+    _reportSessionIssue();
   }
 
   String sizeConvert(double bytes) {

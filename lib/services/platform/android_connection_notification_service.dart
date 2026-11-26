@@ -17,6 +17,7 @@ class AndroidConnectionNotificationService {
   static const int _foregroundServiceId = 8050;
   static const int _progressNotificationId = 8051;
   static const int _offerNotificationId = 8052;
+  static const int _actionErrorNotificationId = 8053;
 
   static const String _connectionChannelKey = 'tcp_connection_service';
   static const String _progressChannelKey = 'file_transfer_progress';
@@ -24,7 +25,6 @@ class AndroidConnectionNotificationService {
   static const Duration _progressUpdateInterval = Duration(milliseconds: 500);
 
   static const String _actionPause = 'progress_pause';
-  static const String _actionResume = 'progress_resume';
   static const String _actionCancel = 'progress_cancel';
   static const String _actionSendFile = 'notif_send_file';
   static const String _actionDisconnect = 'notif_disconnect';
@@ -35,6 +35,15 @@ class AndroidConnectionNotificationService {
   final Map<String, _TransferProgress> _activeTransfers = {};
   final Set<String> _pausedTransfers = {};
   final Set<String> _pendingOffers = {};
+
+  // 待批准批量请求的文件 id，按发送顺序保存；首个 id 是接受/拒绝的目标。
+  final List<String> _pendingBatchIds = [];
+
+  // 已接受、仍在传输的批量请求文件 id；取消时整批处理。
+  final List<String> _activeBatchIds = [];
+
+  // 进度通知聚焦的文件 id：批量传输时跟随正在传输的文件，而不是最后一个。
+  String? _progressFocusFileId;
 
   StreamSubscription<bool>? _connectionSubscription;
   StreamSubscription<Map<String, dynamic>>? _messageSubscription;
@@ -85,13 +94,10 @@ class AndroidConnectionNotificationService {
     final action = receivedAction.buttonKeyPressed;
     switch (action) {
       case _actionPause:
-        _pauseActiveTransfer();
-        break;
-      case _actionResume:
-        _resumeActiveTransfer();
+        _toggleAllPaused();
         break;
       case _actionCancel:
-        _cancelActiveTransfer();
+        _cancelAllTransfers();
         break;
       case _actionSendFile:
         await _pickAndSendFile();
@@ -121,54 +127,98 @@ class AndroidConnectionNotificationService {
   }
 
   String? _activeTransferFileId() {
+    final focus = _progressFocusFileId;
+    if (focus != null && _activeTransfers.containsKey(focus)) {
+      return focus;
+    }
     if (_activeTransfers.isNotEmpty) return _activeTransfers.keys.last;
     final activeTransfers = SocketService.instance
         .getActiveTransferIsReceived();
     return activeTransfers.keys.isEmpty ? null : activeTransfers.keys.last;
   }
 
-  bool _activeTransferIsReceived(String fileId) {
+  /// 返回传输方向；无法确定时返回 null，宁可不动也不发错方向的控制帧。
+  bool? _activeTransferIsReceived(String fileId) {
     final transfer = _activeTransfers[fileId];
     if (transfer != null) return transfer.isReceived;
-    final activeTransfers = SocketService.instance
-        .getActiveTransferIsReceived();
-    return activeTransfers[fileId] ?? true;
+    return SocketService.instance.getActiveTransferIsReceived()[fileId];
   }
 
-  void _pauseActiveTransfer() {
-    final fileId = _activeTransferFileId();
-    if (fileId == null) return;
-    SocketService.instance.pauseTransfer(
-      fileId,
-      isReceiver: _activeTransferIsReceived(fileId),
-    );
+  /// 正在传输的文件 id；通知服务还没记录时退回 SocketService 的记录。
+  List<String> _activeTransferIds() {
+    if (_activeTransfers.isNotEmpty) return _activeTransfers.keys.toList();
+    return SocketService.instance.getActiveTransferIsReceived().keys.toList();
   }
 
-  void _resumeActiveTransfer() {
-    final fileId = _activeTransferFileId();
-    if (fileId == null) return;
-    SocketService.instance.resumeTransfer(
-      fileId,
-      isReceiver: _activeTransferIsReceived(fileId),
-    );
+  /// 通知栏的暂停键按整批处理：未全部暂停时全部暂停，全部暂停后变为全部继续。
+  void _toggleAllPaused() {
+    final fileIds = _activeTransferIds();
+    if (fileIds.isEmpty) return;
+    final resume = fileIds.every(_pausedTransfers.contains);
+    for (final fileId in fileIds) {
+      final isReceiver = _activeTransferIsReceived(fileId);
+      if (isReceiver == null) continue;
+      if (resume) {
+        SocketService.instance.resumeTransfer(fileId, isReceiver: isReceiver);
+      } else {
+        SocketService.instance.pauseTransfer(fileId, isReceiver: isReceiver);
+      }
+    }
+  }
+
+  /// 通知栏的取消键按整批处理：取消所有仍在传的文件。
+  void _cancelAllTransfers() {
+    // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
+    SocketService.instance.cancelQueuedSends();
+    final fileIds = _activeTransferIds();
+    _activeBatchIds.clear();
+    if (fileIds.isEmpty) {
+      _cancelActiveTransfer();
+      return;
+    }
+    for (final fileId in fileIds) {
+      SocketService.instance.cancelTransfer(fileId);
+    }
   }
 
   void _cancelActiveTransfer() {
+    if (_activeBatchIds.isNotEmpty) {
+      final batchIds = List<String>.of(_activeBatchIds);
+      _activeBatchIds.clear();
+      for (final fileId in batchIds) {
+        SocketService.instance.cancelTransfer(fileId);
+      }
+      return;
+    }
+
     final fileId = _activeTransferFileId();
     if (fileId == null) return;
     SocketService.instance.cancelTransfer(fileId);
   }
 
   Future<void> _pickAndSendFile() async {
+    if (!SocketService.instance.hasEstablishedConnection) {
+      _showActionError(_t('No device is connected.', '当前没有连接设备。'));
+      return;
+    }
+
     try {
       final pickedFile = await FastFilePicker.pickFile();
       if (pickedFile == null) return;
       final fileLocation = Platform.isAndroid && pickedFile.uri != null
           ? pickedFile.uri
           : pickedFile.path;
-      if (fileLocation == null) return;
+      if (fileLocation == null) {
+        _showActionError(
+          _t('Could not read the selected file.', '无法读取所选文件。'),
+        );
+        return;
+      }
       SocketService.instance.sendFile(fileLocation);
     } catch (error, stackTrace) {
+      _showActionError(
+        _t('Could not open the file picker.', '无法打开文件选择器。'),
+      );
       FlutterError.reportError(
         FlutterErrorDetails(
           exception: error,
@@ -178,6 +228,25 @@ class AndroidConnectionNotificationService {
         ),
       );
     }
+  }
+
+  /// 通知栏操作失败时给出一条可见提示，避免点击后没有任何反馈。
+  void _showActionError(String message) {
+    unawaited(
+      AwesomeNotifications().createNotification(
+        content: NotificationContent(
+          id: _actionErrorNotificationId,
+          channelKey: _offerChannelKey,
+          title: _t('Cannot send file', '无法发送文件'),
+          body: message,
+          category: NotificationCategory.Error,
+          autoDismissible: true,
+          showWhen: true,
+          displayOnForeground: true,
+          displayOnBackground: true,
+        ),
+      ),
+    );
   }
 
   String get _peerName {
@@ -196,6 +265,9 @@ class AndroidConnectionNotificationService {
     _activeTransfers.clear();
     _pausedTransfers.clear();
     _pendingOffers.clear();
+    _pendingBatchIds.clear();
+    _activeBatchIds.clear();
+    _progressFocusFileId = null;
     _progressNotificationTimer?.cancel();
     _progressNotificationTimer = null;
     unawaited(AwesomeNotifications().cancel(_progressNotificationId));
@@ -269,7 +341,11 @@ class AndroidConnectionNotificationService {
         break;
       case 'start':
         if (message['pendingAcceptance'] == true) {
-          _showReceiverOfferNotification(message);
+          if (message['isBatch'] == true) {
+            _showReceiverBatchNotification(message);
+          } else {
+            _showReceiverOfferNotification(message);
+          }
         } else {
           _startTransfer(message, isReceived: true);
         }
@@ -297,7 +373,7 @@ class AndroidConnectionNotificationService {
       case 'transfer_accepted':
         {
           final fileId = message['fileId'] as String?;
-          _handleOfferResolved(message);
+          _resolveOffer(message);
           if (fileId != null && _activeTransfers.containsKey(fileId)) {
             unawaited(_showConnectionNotification());
             _scheduleProgressNotificationUpdate(force: true);
@@ -305,11 +381,11 @@ class AndroidConnectionNotificationService {
           break;
         }
       case 'transfer_declined':
-        _handleOfferResolved(message);
+        _resolveOffer(message);
         _completeTransfer(message);
         break;
       case 'transfer_cancelled':
-        _handleOfferResolved(message);
+        _resolveOffer(message);
         _completeTransfer(message);
         break;
       case 'send_complete':
@@ -345,6 +421,7 @@ class AndroidConnectionNotificationService {
 
     if (_pendingOffers.contains(fileId)) return;
 
+    _progressFocusFileId = fileId;
     unawaited(_showConnectionNotification());
     _scheduleProgressNotificationUpdate(force: true);
   }
@@ -357,6 +434,7 @@ class AndroidConnectionNotificationService {
     final transfer = _activeTransfers[fileId];
     if (transfer == null) return;
 
+    _progressFocusFileId = fileId;
     final nextPercent = (progress.clamp(0.0, 1.0) * 100).floor();
     if (nextPercent == transfer.lastShownPercent) return;
 
@@ -388,12 +466,17 @@ class AndroidConnectionNotificationService {
     if (fileId == null) {
       _activeTransfers.clear();
       _pausedTransfers.clear();
+      _progressFocusFileId = null;
     } else {
       _activeTransfers.remove(fileId);
       _pausedTransfers.remove(fileId);
+      if (_progressFocusFileId == fileId) {
+        _progressFocusFileId = null;
+      }
     }
 
     if (_activeTransfers.isEmpty) {
+      _activeBatchIds.clear();
       _progressNotificationTimer?.cancel();
       _progressNotificationTimer = null;
       unawaited(AwesomeNotifications().cancel(_progressNotificationId));
@@ -411,6 +494,15 @@ class AndroidConnectionNotificationService {
     if (fileId == null) return;
 
     _pendingOffers.add(fileId);
+    if (message['isBatch'] == true && !_pendingBatchIds.contains(fileId)) {
+      _pendingBatchIds.add(fileId);
+    }
+    final body = _pendingBatchIds.length > 1
+        ? _t(
+            '${_pendingBatchIds.length} files',
+            '${_pendingBatchIds.length} 个文件',
+          )
+        : fileName;
 
     unawaited(
       AwesomeNotifications().createNotification(
@@ -418,7 +510,7 @@ class AndroidConnectionNotificationService {
           id: _offerNotificationId,
           channelKey: _offerChannelKey,
           title: _t('Waiting for receiver to accept', '等待接收方接受'),
-          body: fileName,
+          body: body,
           locked: true,
           autoDismissible: false,
           showWhen: false,
@@ -475,6 +567,55 @@ class AndroidConnectionNotificationService {
     );
   }
 
+  /// 批量接收通知：file_batch 的 start 没有顶层 fileId，按文件列表展示。
+  void _showReceiverBatchNotification(Map<String, dynamic> message) {
+    final rawFiles = message['files'] as List<dynamic>?;
+    if (rawFiles == null || rawFiles.isEmpty) return;
+
+    final fileIds = <String>[];
+    for (final file in rawFiles) {
+      if (file is Map && file['fileId'] is String) {
+        fileIds.add(file['fileId'] as String);
+      }
+    }
+    if (fileIds.isEmpty) return;
+
+    _pendingOffers.addAll(fileIds);
+    _pendingBatchIds
+      ..clear()
+      ..addAll(fileIds);
+
+    unawaited(
+      AwesomeNotifications().createNotification(
+        content: NotificationContent(
+          id: _offerNotificationId,
+          channelKey: _offerChannelKey,
+          title: _t('Incoming files', '接收多个文件'),
+          body: _t('${fileIds.length} files', '${fileIds.length} 个文件'),
+          locked: true,
+          autoDismissible: false,
+          showWhen: false,
+          displayOnForeground: true,
+          displayOnBackground: true,
+        ),
+        actionButtons: [
+          NotificationActionButton(
+            key: _actionAcceptFile,
+            label: _t('Accept', '接受'),
+            actionType: ActionType.SilentAction,
+            autoDismissible: false,
+          ),
+          NotificationActionButton(
+            key: _actionDeclineFile,
+            label: _t('Decline', '拒绝'),
+            actionType: ActionType.SilentAction,
+            autoDismissible: false,
+          ),
+        ],
+      ),
+    );
+  }
+
   void _handleOfferResolved(Map<String, dynamic> message) {
     final fileId = message['fileId'] as String?;
     if (fileId != null) {
@@ -485,21 +626,66 @@ class AndroidConnectionNotificationService {
     }
   }
 
+  /// 请求被接受/拒绝/取消时同步通知状态；批量请求的首个文件结束时清整组。
+  void _resolveOffer(Map<String, dynamic> message) {
+    final fileId = message['fileId'] as String?;
+    if (fileId != null &&
+        _pendingBatchIds.isNotEmpty &&
+        fileId == _pendingBatchIds.first) {
+      if (message['status'] == 'transfer_accepted') {
+        _activeBatchIds
+          ..clear()
+          ..addAll(_pendingBatchIds);
+      }
+      _clearPendingOfferGroup();
+      return;
+    }
+    _handleOfferResolved(message);
+  }
+
+  /// 批量请求只显示一条通知，处理后把整组从待批准集合移除并收起通知。
+  void _clearPendingOfferGroup() {
+    if (_pendingBatchIds.isNotEmpty) {
+      for (final fileId in _pendingBatchIds) {
+        _pendingOffers.remove(fileId);
+      }
+      _pendingBatchIds.clear();
+    }
+    if (_pendingOffers.isEmpty) {
+      unawaited(AwesomeNotifications().cancel(_offerNotificationId));
+    }
+  }
+
+  /// 接受/拒绝的目标：批量请求取首个文件，普通请求取最早的一条。
+  String? _nextPendingOfferId() {
+    if (_pendingBatchIds.isNotEmpty) return _pendingBatchIds.first;
+    if (_pendingOffers.isEmpty) return null;
+    return _pendingOffers.first;
+  }
+
   void _handleOfferCancelledBySender() {
     _pendingOffers.clear();
+    _pendingBatchIds.clear();
     unawaited(AwesomeNotifications().cancel(_offerNotificationId));
   }
 
   void _acceptPendingOffer() {
-    if (_pendingOffers.isEmpty) return;
-    final fileId = _pendingOffers.last;
+    final fileId = _nextPendingOfferId();
+    if (fileId == null) return;
     SocketService.instance.acceptTransfer(fileId);
+    if (_pendingBatchIds.isNotEmpty) {
+      _activeBatchIds
+        ..clear()
+        ..addAll(_pendingBatchIds);
+    }
+    _clearPendingOfferGroup();
   }
 
   void _declinePendingOffer() {
-    if (_pendingOffers.isEmpty) return;
-    final fileId = _pendingOffers.last;
+    final fileId = _nextPendingOfferId();
+    if (fileId == null) return;
     SocketService.instance.declineTransfer(fileId);
+    _clearPendingOfferGroup();
   }
 
   void _cancelPendingOffer() {
@@ -511,15 +697,26 @@ class AndroidConnectionNotificationService {
     for (final fileId in List<String>.of(_pendingOffers)) {
       SocketService.instance.cancelTransfer(fileId);
     }
+    _pendingBatchIds.clear();
 
     // 同时结束本次请求协商，让审批页等界面按“已取消”关闭。
     unawaited(SocketService.instance.cancelOutgoingOffer());
   }
 
-  void _scheduleProgressNotificationUpdate({bool force = false}) {
-    if (_activeTransfers.isEmpty) return;
+  /// 进度通知要展示/操作的传输：优先跟随正在传输的文件，取不到时退回最后登记的一个。
+  _TransferProgress? _progressTransfer() {
+    final focus = _progressFocusFileId;
+    if (focus != null) {
+      final transfer = _activeTransfers[focus];
+      if (transfer != null) return transfer;
+    }
+    return _activeTransfers.isEmpty ? null : _activeTransfers.values.last;
+  }
 
-    final transfer = _activeTransfers.values.last;
+  void _scheduleProgressNotificationUpdate({bool force = false}) {
+    final transfer = _progressTransfer();
+    if (transfer == null) return;
+
     final percent = (transfer.progress.clamp(0.0, 1.0) * 100).floor();
     if (percent >= 100) return;
 
@@ -548,36 +745,32 @@ class AndroidConnectionNotificationService {
   }
 
   Future<void> _showProgressNotification() async {
-    if (_activeTransfers.isEmpty) return;
+    final transfer = _progressTransfer();
+    if (transfer == null) return;
 
-    final transfer = _activeTransfers.values.last;
     final percent = (transfer.progress.clamp(0.0, 1.0) * 100).floor();
     if (percent >= 100) return;
 
     _lastProgressNotificationUpdate = DateTime.now();
 
-    final isPaused = _pausedTransfers.contains(transfer.fileId);
+    final activeIds = _activeTransferIds();
+    final allPaused =
+        activeIds.isNotEmpty && activeIds.every(_pausedTransfers.contains);
     final directionLabel = transfer.direction == 'receiving'
         ? _t('Receiving', '接收中')
         : _t('Sending', '发送中');
     final actions = [
-      if (isPaused)
-        NotificationActionButton(
-          key: _actionResume,
-          label: _t('Resume', '继续'),
-          actionType: ActionType.SilentAction,
-          autoDismissible: false,
-        )
-      else
-        NotificationActionButton(
-          key: _actionPause,
-          label: _t('Pause', '暂停'),
-          actionType: ActionType.SilentAction,
-          autoDismissible: false,
-        ),
+      NotificationActionButton(
+        key: _actionPause,
+        label: allPaused
+            ? _t('Resume all', '全部继续')
+            : _t('Pause all', '全部暂停'),
+        actionType: ActionType.SilentAction,
+        autoDismissible: false,
+      ),
       NotificationActionButton(
         key: _actionCancel,
-        label: _t('Cancel', '取消'),
+        label: _t('Cancel all', '全部取消'),
         actionType: ActionType.SilentAction,
         autoDismissible: false,
       ),

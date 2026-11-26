@@ -346,7 +346,8 @@ void fileReceiverIsolate(List<Object> args) {
               });
             }
           }
-        } else if (command['command'] == 'send_file') {
+        } else if (command['command'] == 'send_file' ||
+            command['command'] == 'send_file_separate') {
           if (localDisconnectRequested) {
             continue;
           }
@@ -360,9 +361,12 @@ void fileReceiverIsolate(List<Object> args) {
           }
 
           final batch = <Map<String, dynamic>>[command];
-          while (commandQueue.isNotEmpty &&
-              commandQueue.first['command'] == 'send_file') {
-            batch.add(commandQueue.removeFirst());
+          // 只有普通的 send_file 才合并成批量请求；send_file_separate 每个文件单独请求。
+          if (command['command'] == 'send_file') {
+            while (commandQueue.isNotEmpty &&
+                commandQueue.first['command'] == 'send_file') {
+              batch.add(commandQueue.removeFirst());
+            }
           }
 
           try {
@@ -635,6 +639,30 @@ void fileReceiverIsolate(List<Object> args) {
       }
       processCommandQueue();
       return;
+    } else if (command['command'] == 'send_files_separately') {
+      // 逐个发送：每个文件都作为独立的单文件请求排队，不合并成批量请求。
+      final filePaths = command['filePaths'] as List<dynamic>;
+      for (final path in filePaths) {
+        commandQueue.add({
+          'command': 'send_file_separate',
+          'filePath': path as String,
+        });
+      }
+      processCommandQueue();
+      return;
+    } else if (command['command'] == 'cancel_queued_sends') {
+      // 取消还没开始发送的排队文件；正在传的文件由 cancel_transfer 处理。
+      final kept = commandQueue
+          .where(
+            (queued) =>
+                queued['command'] != 'send_file' &&
+                queued['command'] != 'send_file_separate',
+          )
+          .toList();
+      commandQueue
+        ..clear()
+        ..addAll(kept);
+      return;
     }
     commandQueue.add(command);
     processCommandQueue();
@@ -653,6 +681,8 @@ Future<String?> _sendFileCommand(
   Future<void> Function(String fileId)? onPaused,
 }) async {
   final filePath = command['filePath'] as String;
+  final displayName = command['displayName'] as String?;
+  final clipboard = command['clipboard'] == true;
   File? fileToSend;
   Map<String, dynamic>? fileHeader;
 
@@ -671,7 +701,7 @@ Future<String?> _sendFileCommand(
 
       fileHeader = {
         'uuid': Uuid().v4(),
-        'name': core.displayFileName(source.fileName),
+        'name': displayName ?? core.displayFileName(source.fileName),
         'size': source.fileSize,
       };
     } else {
@@ -680,7 +710,7 @@ Future<String?> _sendFileCommand(
 
       fileHeader = {
         'uuid': Uuid().v4(),
-        'name': core.displayFileName(filePath),
+        'name': displayName ?? core.displayFileName(filePath),
         'size': fileStats.size,
       };
     }
@@ -690,6 +720,7 @@ Future<String?> _sendFileCommand(
       'uuid': fileHeader['uuid'],
       'name': fileHeader['name'],
       'size': fileHeader['size'],
+      if (clipboard) 'clipboard': true,
     });
 
     toUiSendPort.send({
@@ -698,6 +729,7 @@ Future<String?> _sendFileCommand(
       'fileName': fileHeader['name'],
       'fileSize': fileHeader['size'],
       'filePath': command['filePath'],
+      'clipboard': clipboard,
       'pendingAcceptance': true,
     });
 
@@ -720,6 +752,7 @@ Future<String?> _sendFileCommand(
       'fileName': fileHeader['name'],
       'fileSize': fileHeader['size'],
       'filePath': command['filePath'],
+      'clipboard': clipboard,
       'pendingAcceptance': false,
     });
 
@@ -728,6 +761,7 @@ Future<String?> _sendFileCommand(
       'uuid': fileHeader['uuid'],
       'name': fileHeader['name'],
       'size': fileHeader['size'],
+      if (clipboard) 'clipboard': true,
     });
     fileStarted = true;
 
@@ -1195,6 +1229,9 @@ void _handleSocketConnection(
   bool connectionErrorSent = false;
   bool gracefulDisconnect = false;
   bool socketClosed = false;
+
+  // 最近一次收到对端数据的时间；心跳据此判断链路是否还活着。
+  var lastInboundAt = DateTime.now();
   final localUsesTls = localPeerInfo['tls'] == true;
 
   Future<void> cleanupOpenFile() async {
@@ -1217,7 +1254,10 @@ void _handleSocketConnection(
       return;
     }
 
-    await target.closeWriter();
+    // 粘贴板内容只在传输完整时写回，丢弃半截内容时不能触发 closeWriter。
+    if (activeFileHeader?['clipboard'] != true) {
+      await target.closeWriter();
+    }
     await target.deleteFile();
 
     activeOutputTarget = null;
@@ -1227,7 +1267,9 @@ void _handleSocketConnection(
   Future<void> discardActiveOutputForCancel() async {
     final target = activeOutputTarget;
     if (target != null) {
-      await target.closeWriter();
+      if (activeFileHeader?['clipboard'] != true) {
+        await target.closeWriter();
+      }
       await target.deleteFile();
     }
 
@@ -1235,12 +1277,18 @@ void _handleSocketConnection(
   }
 
   void sendControlFrame(Map<String, dynamic> payload) {
-    final payloadBytes = utf8.encode(jsonEncode(payload));
-    final header = ByteData(8);
-    header.setUint32(0, payloadBytes.length, Endian.big);
-    header.setUint32(4, 0, Endian.big);
-    socket.add(header.buffer.asUint8List());
-    socket.add(payloadBytes);
+    try {
+      final payloadBytes = utf8.encode(jsonEncode(payload));
+      final header = ByteData(8);
+      header.setUint32(0, payloadBytes.length, Endian.big);
+      header.setUint32(4, 0, Endian.big);
+      socket.add(header.buffer.asUint8List());
+      socket.add(payloadBytes);
+    } catch (e) {
+      // 连接已断时写帧会抛异常，由 socket 的 onError/onDone 上报本次会话结束；
+      // 这里吞掉，避免异常冒到读循环变成未捕获异常。
+      debugPrint('[FRAME] sendControlFrame failed: $e');
+    }
   }
 
   void sendLocalPeerInfo() {
@@ -1267,9 +1315,10 @@ void _handleSocketConnection(
     if (markProbeHandled) {
       probeHandled = true;
     }
+    // fatal 与其它错误消息保持字符串 'true'/'false'，界面按字符串判断是否致命。
     toUiSendPort.send({
       'status': 'error',
-      'fatal': fatal,
+      'fatal': fatal ? 'true' : 'false',
       'message': message,
     });
   }
@@ -1421,6 +1470,7 @@ void _handleSocketConnection(
             'filePath': '',
             'fileSize': fileSize,
             'pendingAcceptance': true,
+            'clipboard': headerJson['clipboard'] == true,
           });
         }
         return true;
@@ -1507,36 +1557,58 @@ void _handleSocketConnection(
     return false;
   }
 
+  /// 粘贴板接收目标：内容只留在内存里，关闭时写回系统粘贴板，不生成磁盘文件。
+  core.OutputTarget _createClipboardOutputTarget({required String fileName}) {
+    final bytes = <int>[];
+    return core.OutputTarget.custom(
+      fileName: fileName,
+      filePath: '',
+      writeChunk: (chunk) => bytes.addAll(chunk),
+      closeWriter: () async {
+        final text = utf8.decode(bytes, allowMalformed: true);
+        await Clipboard.setData(ClipboardData(text: text));
+      },
+      deleteFile: () async {},
+    );
+  }
+
   Future<void> beginFileFrame(
     Map<String, dynamic> headerJson,
     int fileSize, {
     required bool chunked,
   }) async {
     final fileName = headerJson['name'] as String;
+    final isClipboard = headerJson['clipboard'] == true;
     core.OutputTarget? fileTarget;
-    try {
-      fileTarget = await _createOutputTarget(
-        configuredDownloadDirectory: getDownloadDirectory?.call(),
-        originalFileName: core.displayFileName(fileName),
-        onWriteError: (e) {
-          connectionErrorSent = true;
-          toUiSendPort.send({
-            'status': 'error',
-            'fatal': 'true',
-            'message': 'Could not save received file: ${e.toString()}',
-          });
-          closeSocket();
-        },
+    if (isClipboard) {
+      fileTarget = _createClipboardOutputTarget(
+        fileName: core.displayFileName(fileName),
       );
-    } catch (e) {
-      connectionErrorSent = true;
-      toUiSendPort.send({
-        'status': 'error',
-        'fatal': 'true',
-        'message': 'Could not prepare file for download: ${e.toString()}',
-      });
-      closeSocket();
-      return;
+    } else {
+      try {
+        fileTarget = await _createOutputTarget(
+          configuredDownloadDirectory: getDownloadDirectory?.call(),
+          originalFileName: core.displayFileName(fileName),
+          onWriteError: (e) {
+            connectionErrorSent = true;
+            toUiSendPort.send({
+              'status': 'error',
+              'fatal': 'true',
+              'message': 'Could not save received file: ${e.toString()}',
+            });
+            closeSocket();
+          },
+        );
+      } catch (e) {
+        connectionErrorSent = true;
+        toUiSendPort.send({
+          'status': 'error',
+          'fatal': 'true',
+          'message': 'Could not prepare file for download: ${e.toString()}',
+        });
+        closeSocket();
+        return;
+      }
     }
     activeOutputTarget = fileTarget;
     activeFileHeader = headerJson;
@@ -1554,6 +1626,7 @@ void _handleSocketConnection(
       'fileName': fileTarget.fileName,
       'filePath': fileTarget.filePath,
       'fileSize': fileSize,
+      'clipboard': isClipboard,
     });
   }
 
@@ -1577,7 +1650,9 @@ void _handleSocketConnection(
       toUiSendPort.send({
         'status': 'error',
         'fatal': 'true',
-        'message': 'Could not save received file: ${e.toString()}',
+        'message': header['clipboard'] == true
+            ? 'Could not write the clipboard text: ${e.toString()}'
+            : 'Could not save received file: ${e.toString()}',
       });
       stopwatch.stop();
       activeOutputTarget = null;
@@ -1592,6 +1667,7 @@ void _handleSocketConnection(
       'timeTaken': timeTaken,
       'fileName': target.fileName,
       'filePath': target.filePath,
+      'clipboard': header['clipboard'] == true,
     });
 
     stopwatch.stop();
@@ -1827,6 +1903,7 @@ void _handleSocketConnection(
   late StreamSubscription<List<int>> subscription;
   subscription = socket.listen(
     (data) async {
+      lastInboundAt = DateTime.now();
       subscription.pause();
       try {
         readBuffer.add(data);
@@ -1874,6 +1951,8 @@ void _handleSocketConnection(
       } else if (!connectionErrorSent &&
           !gracefulDisconnect &&
           !suppressErrors) {
+        // 标记已上报，避免随后的 onDone 再报一次同样的会话结束。
+        connectionErrorSent = true;
         toUiSendPort.send({
           'status': 'error',
           'fatal': 'true',
@@ -1883,6 +1962,56 @@ void _handleSocketConnection(
       closeSocket();
     },
   );
+
+  // 心跳：双方每 3 秒互发 ping，收到任意数据都算链路还在。只读的一方也能靠它
+  // 发现对端掉网，不必等内核的 TCP 重传超时（默认十几分钟才报错）。
+  Timer? heartbeatTimer;
+  var lastHeartbeatTickAt = DateTime.now();
+  heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    if (socketClosed) {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = null;
+      return;
+    }
+
+    final now = DateTime.now();
+    final sinceLastTick = now.difference(lastHeartbeatTickAt);
+    lastHeartbeatTickAt = now;
+
+    // 定时器严重迟到说明本机被系统挂起或长时间忙于同步工作，这段静默不能算掉线。
+    if (sinceLastTick > const Duration(seconds: 10)) {
+      lastInboundAt = now;
+      return;
+    }
+    if (!probeHandled) {
+      // 握手阶段由探测超时兜底，这里只刷新计时，避免把握手耗时当成掉线。
+      lastInboundAt = now;
+      return;
+    }
+    if (subscription.isPaused) {
+      // 正在本地处理数据（例如写文件），对端这段时间收不到进度；刷新本地计时
+      // 以免把自己算成掉线，同时照常发心跳让对端知道本机还在。
+      lastInboundAt = now;
+    } else if (now.difference(lastInboundAt) >= const Duration(seconds: 15)) {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = null;
+      // 明确标记是心跳判死，和 socket 报错、对端关闭连接区分开。
+      debugPrint('[SESSION] heartbeat timeout');
+      if (!(shouldSuppressConnectionErrors?.call() ?? false) &&
+          !gracefulDisconnect) {
+        sendConnectionError(
+          'Connection lost. The other device disconnected unexpectedly.',
+        );
+      }
+      closeSocket();
+      return;
+    }
+    try {
+      sendControlFrame({'type': 'ping'});
+    } catch (_) {
+      // 写入失败说明 socket 已不可用，收尾交给 onDone / onError。
+    }
+  });
 }
 
 Future<String> _resolveDownloadDirectory({String? commandDirectory}) async {

@@ -42,6 +42,14 @@ class _OutgoingTransferOfferPageState extends State<OutgoingTransferOfferPage> {
   void initState() {
     super.initState();
     _receiver = SocketService.instance.connectedPeerInfo;
+
+    // 应用在后台时不渲染新帧，本页要等回到前台才构建；这段时间里连接可能已经
+    // 断开。会话不存在时再发文件没有意义，直接显示连接已结束，也不发请求。
+    if (!SocketService.instance.hasEstablishedConnection) {
+      _outcome = _OutgoingOfferOutcome.connectionEnded;
+      return;
+    }
+
     _subscription = SocketService.instance.messageStream.listen((message) {
       if (!mounted) return;
 
