@@ -798,14 +798,21 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
     if (_requestInTransfer) {
       final allPaused = _allPaused(_requestWidgets);
+      // 本端发起的暂停能自己继续；对方暂停时只能等对方继续。
+      final canResumeAny = _requestWidgets.any(
+        (widget) =>
+            widget.status == TransferStatus.paused && widget.canResume,
+      );
       return _buildTransferStatusButton(
         icon: allPaused
             ? Icons.pause_circle_outline_rounded
             : Icons.hourglass_top_rounded,
         title: allPaused ? l10n.transferPaused : l10n.transferInProgress,
-        subtitle: allPaused
+        subtitle: !allPaused
+            ? l10n.waitForTransferToFinish
+            : canResumeAny
             ? l10n.transferPausedHint
-            : l10n.waitForTransferToFinish,
+            : l10n.transferPausedWaiting,
         disconnected: false,
       );
     }
