@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.PowerManager
+import android.os.StatFs
 import android.provider.OpenableColumns
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -77,6 +78,45 @@ class MainActivity : FlutterActivity() {
                 sharedFilesSink = null
             }
         })
+
+        // 传输期间的前台服务启停：Dart 侧在文件开始传输时调用 start，
+        // 传输结束或连接断开时调用 stop。
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "flashbyte/foreground_service"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    TransferForegroundService.start(applicationContext)
+                    result.success(null)
+                }
+                "stop" -> {
+                    TransferForegroundService.stop(applicationContext)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // 接收前的空间预检：即使目标是 SAF 目录，数据也先写应用存储。
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "flashbyte/storage"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "availableBytes" -> result.success(availableStorageBytes())
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** 应用存储所在卷的可用字节数；读取失败返回 -1，Dart 侧按“未知”处理。 */
+    private fun availableStorageBytes(): Long {
+        return try {
+            StatFs(applicationContext.filesDir.absolutePath).availableBytes
+        } catch (_: Exception) {
+            -1L
+        }
     }
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
