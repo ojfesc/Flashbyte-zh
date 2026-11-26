@@ -372,6 +372,8 @@ class AppLocalizations {
   String get transferPaused => isZh ? '传输已暂停' : 'Transfer paused';
   String get transferPausedHint =>
       isZh ? '点“继续”恢复传输' : 'Tap Resume to continue';
+  String get transferPausedWaiting =>
+      isZh ? '等待继续传输中' : 'Waiting for the transfer to resume';
   String get statusReceived => isZh ? '已接收' : 'received';
   String get statusSent => isZh ? '已发送' : 'sent';
   String get statusReceiving => isZh ? '接收中' : 'receiving';
