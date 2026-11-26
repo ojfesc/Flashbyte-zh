@@ -52,7 +52,19 @@ class _TcpChatPageState extends State<TcpChatPage> {
   bool _leavingPage = false;
   bool _suppressNextConnectionIssueAfterCancellation = false;
   bool _fatalErrorReceived = false;
+  String? _fatalErrorReason;
   _SessionIssue? _sessionIssue;
+
+  // The last sent file that was interrupted; used to reconnect and resume
+  // instead of forcing the user to pick the multi-gigabyte file again.
+  String? _resumeFilePath;
+  String? _resumeFileName;
+  String? _resumeFileUuid;
+  Timer? _resumeTimer;
+  bool _resumeInProgress = false;
+  bool _pendingResumeAfterConnect = false;
+  int _resumeAttempts = 0;
+  int _connectionEpoch = 0;
 
   /// 当前文件请求包含的文件 id（按发送顺序）。请求结束后清空。
   List<String> _requestFileIds = [];
@@ -117,6 +129,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
         final status = message['status'] ?? message['command'];
 
         switch (status) {
+          case 'client_connected':
+          case 'connected_to_host':
+            _handleConnectionEstablished();
+            break;
           case 'peer_info':
             if (!mounted) return;
             setState(() {
@@ -126,7 +142,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           case 'disconnect':
             if (!mounted) return;
             _disconnectSignalSent = true;
-            _handleDisconnectAfterCancellationWindow();
+            _handleDisconnectAfterCancellationWindow(_connectionEpoch);
             break;
           case 'start':
             if (message['isBatch'] == true) {
@@ -302,10 +318,18 @@ class _TcpChatPageState extends State<TcpChatPage> {
                 message['message'] as String? ??
                 AppLocalizations.of(context).unknownError;
             if (isFatal) {
+              if (_pendingResumeAfterConnect) {
+                // A reconnect attempt failed; the periodic retry still owns
+                // the resume state and will try again.
+                _pendingResumeAfterConnect = false;
+                _resumeInProgress = false;
+                return;
+              }
               // 致命错误不再弹窗，只按会话结束处理；原因写进日志便于排查。
               debugPrint('[SESSION] fatal error: $errorText');
               _fatalErrorReceived = true;
-              _reportSessionIssueAfterCancellationWindow();
+              _fatalErrorReason = errorText;
+              _reportSessionIssueAfterCancellationWindow(_connectionEpoch);
             } else if (!_fatalErrorReceived) {
               // 会话已经因致命错误结束时，逐文件上报的普通错误不再重复提示。
               if (!mounted) return;
@@ -330,6 +354,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   @override
   void dispose() {
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
     _streamSubscription?.cancel();
     _sharedFilesSubscription?.cancel();
     for (final notifier in _transferProgress.values) {
@@ -779,6 +805,36 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
+  /// Turns the raw socket/protocol error into a short, actionable subtitle.
+  String _issueSubtitle(AppLocalizations l10n) {
+    final reason = _fatalErrorReason;
+    if (reason == null || reason.isEmpty) {
+      return l10n.reconnectToSendMore;
+    }
+    final lower = reason.toLowerCase();
+    final isZh = Localizations.localeOf(context).languageCode == 'zh';
+    if (lower.contains('errno = 103') ||
+        lower.contains('errno = 101') ||
+        lower.contains('software caused connection abort') ||
+        lower.contains('network is unreachable')) {
+      return isZh ? '网络连接中断，可继续传输' : 'Network connection lost; resume to continue.';
+    }
+    if (lower.contains('heartbeat')) {
+      return isZh ? '连接超时，可继续传输' : 'Connection timed out; resume to continue.';
+    }
+    if (lower.contains('incomplete') || lower.contains('size mismatch')) {
+      return isZh ? '文件大小校验失败，需要重新传输' : 'File size verification failed. Send it again.';
+    }
+    if (lower.contains('save received file') ||
+        lower.contains('prepare file')) {
+      return isZh ? '接收方保存文件失败' : 'The receiver could not save the file.';
+    }
+    final singleLine = reason.replaceAll('\n', ' ').trim();
+    return singleLine.length <= 90
+        ? singleLine
+        : '${singleLine.substring(0, 90)}…';
+  }
+
   /// 空闲时显示三个发送入口；连接断开、传输中、等待批准时显示状态区。
   ///
   /// 连接断开后直接显示结果：打断过未完成的传输时显示“传输被中断”，
@@ -787,13 +843,30 @@ class _TcpChatPageState extends State<TcpChatPage> {
     final l10n = AppLocalizations.of(context);
     if (isConnectionLost) {
       final interrupted = _sessionIssue == _SessionIssue.transferInterrupted;
-      return _buildTransferStatusButton(
+      final status = _buildTransferStatusButton(
         icon: interrupted
             ? Icons.sync_problem_rounded
             : Icons.link_off_rounded,
         title: interrupted ? l10n.transferInterrupted : l10n.connectionLost,
-        subtitle: l10n.reconnectToSendMore,
+        subtitle: _issueSubtitle(l10n),
         disconnected: true,
+      );
+      if (!interrupted || _resumeFilePath == null) {
+        return status;
+      }
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          status,
+          const SizedBox(height: 8),
+          _requestPrimaryButton(
+            icon: Icons.play_arrow_rounded,
+            label: l10n.continueAction,
+            onPressed: _resumeInProgress
+                ? null
+                : () => unawaited(_resumeTransfer()),
+          ),
+        ],
       );
     }
     if (_requestInTransfer) {
@@ -1111,6 +1184,20 @@ class _TcpChatPageState extends State<TcpChatPage> {
     if (!mounted) return;
 
     final interrupted = isSharingInProgress || _hasUnfinishedTransfers();
+    if (interrupted) {
+      for (final widget in _fileTransferWidgets.value) {
+        if (!widget.isReceived &&
+            !widget.clipboard &&
+            widget.filePath.isNotEmpty &&
+            widget.status != TransferStatus.completed &&
+            widget.status != TransferStatus.cancelled) {
+          _resumeFilePath = widget.filePath;
+          _resumeFileName = widget.fileName;
+          _resumeFileUuid = widget.uuid;
+          break;
+        }
+      }
+    }
     setState(() {
       isSharingInProgress = false;
       _sessionIssue ??= interrupted
@@ -1118,6 +1205,131 @@ class _TcpChatPageState extends State<TcpChatPage> {
           : _SessionIssue.connectionLost;
     });
     isDisconnected.value = true;
+    if (_resumeFilePath != null && !_leavingPage && !_disconnectSignalSent) {
+      _scheduleResume();
+    }
+  }
+
+  /// Reconnects to the same peer and lets the isolate offer the file again.
+  ///
+  /// The receiver keeps a partial file keyed by the file path/name/size, so
+  /// the new offer resumes at the offset it reports.
+  Future<void> _resumeTransfer() async {
+    final path = _resumeFilePath;
+    if (path == null || _resumeInProgress || _pendingResumeAfterConnect) {
+      return;
+    }
+    final peer = _peerInfo;
+    final address = peer?['address'] as String?;
+    if (address == null) {
+      return;
+    }
+
+    final port = (peer?['port'] as num?)?.toInt() ?? 8050;
+    final useTls = peer?['tls'] == true;
+    final fingerprint = peer?['certFingerprint'] as String?;
+    _resumeInProgress = true;
+    _pendingResumeAfterConnect = true;
+    try {
+      await SocketService.instance.connectToHost(
+        address,
+        port: port,
+        useTLS: useTls,
+        expectedCertificateFingerprint: useTls ? fingerprint : null,
+        trustedPeerId: useTls ? fingerprint : null,
+      );
+      // If the connection event never arrives, allow the next retry.
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 12), () {
+          if (!mounted || !_pendingResumeAfterConnect) {
+            return;
+          }
+          _pendingResumeAfterConnect = false;
+          _resumeInProgress = false;
+        }),
+      );
+    } catch (_) {
+      _pendingResumeAfterConnect = false;
+      _resumeInProgress = false;
+    }
+  }
+
+  void _scheduleResume() {
+    _resumeTimer?.cancel();
+    if (_resumeFilePath == null) {
+      return;
+    }
+    _resumeAttempts = 0;
+    _resumeTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (!mounted || _leavingPage || _resumeFilePath == null) {
+        timer.cancel();
+        return;
+      }
+      if (_resumeInProgress || _pendingResumeAfterConnect) {
+        return;
+      }
+      _resumeAttempts++;
+      if (_resumeAttempts > 20) {
+        timer.cancel();
+        return;
+      }
+      unawaited(_resumeTransfer());
+    });
+  }
+
+  /// Handles a fresh connection and resumes the interrupted sent file once.
+  void _handleConnectionEstablished() {
+    if (!mounted) {
+      return;
+    }
+    _connectionEpoch++;
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    _resumeInProgress = false;
+    _disconnectSignalSent = false;
+    final shouldSendResume =
+        _pendingResumeAfterConnect && _resumeFilePath != null;
+    _pendingResumeAfterConnect = false;
+
+    if (isDisconnected.value || _sessionIssue != null || _fatalErrorReceived) {
+      setState(() {
+        _sessionIssue = null;
+        _fatalErrorReceived = false;
+        _fatalErrorReason = null;
+      });
+      isDisconnected.value = false;
+    }
+
+    if (!shouldSendResume) {
+      // A normal new connection: drop any stale resume target so a later
+      // disconnect cannot resurrect an old file.
+      _resumeFilePath = null;
+      _resumeFileName = null;
+      _resumeFileUuid = null;
+      return;
+    }
+
+    final path = _resumeFilePath!;
+    final name = _resumeFileName;
+    final uuid = _resumeFileUuid;
+    _resumeFilePath = null;
+    _resumeFileName = null;
+    _resumeFileUuid = null;
+    if (uuid != null) {
+      _fileTransferWidgets.value = _fileTransferWidgets.value
+          .where((widget) => widget.uuid != uuid)
+          .toList();
+      _transferProgress.remove(uuid)?.dispose();
+      _pendingTransferStatuses.remove(uuid);
+      _pendingTransferCanResume.remove(uuid);
+      _pendingTransferPausedBy.remove(uuid);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _leavingPage) {
+        return;
+      }
+      SocketService.instance.sendFile(path, displayName: name);
+    });
   }
 
   void replaceTransferWidget({
@@ -1610,12 +1822,31 @@ class _TcpChatPageState extends State<TcpChatPage> {
     _finishRequestIfSettled();
   }
 
-  Future<void> _handleDisconnectAfterCancellationWindow() async {
+  Future<void> _handleDisconnectAfterCancellationWindow(int epoch) async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted || _suppressNextConnectionIssueAfterCancellation) {
+    if (!mounted || epoch != _connectionEpoch) {
+      return;
+    }
+    if (_suppressNextConnectionIssueAfterCancellation) {
       if (mounted) {
         isDisconnected.value = true;
       }
+      return;
+    }
+    if (!_leavingPage &&
+        (_resumeFilePath != null ||
+            _resumeInProgress ||
+            _pendingResumeAfterConnect)) {
+      // A resume attempt deliberately stops the previous isolate; that
+      // internal disconnect must not pop the page.
+      isDisconnected.value = true;
+      return;
+    }
+    if (!_leavingPage &&
+        (_sessionIssue != null || _hasUnfinishedTransfers())) {
+      // A receive session that already reported an interruption, or a page
+      // that still has unfinished cards, must stay open for the reconnect.
+      isDisconnected.value = true;
       return;
     }
     if (!_leavingPage && isSharingInProgress) {
@@ -1631,9 +1862,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
   }
 
   /// 用户主动取消后的宽限期内不报异常，避免把取消引起的断开算成传输中断。
-  Future<void> _reportSessionIssueAfterCancellationWindow() async {
+  Future<void> _reportSessionIssueAfterCancellationWindow(int epoch) async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted ||
+        epoch != _connectionEpoch ||
         _disconnectSignalSent ||
         _suppressNextConnectionIssueAfterCancellation) {
       return;
