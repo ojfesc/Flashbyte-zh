@@ -103,7 +103,15 @@ Future<void> main() async {
   );
 
   if (await AppSettings.getUseTls()) {
-    await TlsIdentityService.getOrCreateIdentity();
+    // 密钥生成在独立 isolate 里进行；这里不等待它，避免首启多等一次生成时间。
+    unawaited(
+      TlsIdentityService.getOrCreateIdentity().then<void>(
+        (_) {},
+        onError: (Object error) {
+          debugPrint('[TLS] identity pre-generation failed: $error');
+        },
+      ),
+    );
   }
   await AppAppearanceController.instance.load();
   await AppMotionController.instance.load();
