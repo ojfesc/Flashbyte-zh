@@ -36,6 +36,9 @@ class TransferWidget extends StatelessWidget {
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
 
+  /// 排队中的文件提供逐文件取消；为空时不显示该按键（例如单文件请求）。
+  final VoidCallback? onCancelQueued;
+
   const TransferWidget({
     super.key,
     required this.fileName,
@@ -52,6 +55,7 @@ class TransferWidget extends StatelessWidget {
     this.onCancel,
     this.onAccept,
     this.onDecline,
+    this.onCancelQueued,
   });
 
   @override
@@ -68,7 +72,7 @@ class TransferWidget extends StatelessWidget {
         status == TransferStatus.inProgress || status == TransferStatus.paused;
     final transferStateText = switch (status) {
       TransferStatus.pending => isReceived ? l10n.statusRequest : l10n.statusWaiting,
-      TransferStatus.queued => '',
+      TransferStatus.queued => l10n.statusQueued,
       TransferStatus.cancelled => l10n.statusCancelled,
       TransferStatus.paused => l10n.transferPaused,
       TransferStatus.completed =>
@@ -216,6 +220,11 @@ class TransferWidget extends StatelessWidget {
                               onResume: onResume,
                               onCancel: onCancel,
                             ),
+                          if (isQueued && onCancelQueued != null)
+                            _QueuedFileControl(
+                              label: l10n.cancelFile,
+                              onCancel: onCancelQueued!,
+                            ),
                           if (isPending)
                             _TransferAcceptanceControls(
                               isReceived: isReceived,
@@ -301,8 +310,10 @@ class _TransferControls extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Row(
+    // Wrap 而不是 Row：系统字体放大时按键换行，避免整行溢出。
+    return Wrap(
       spacing: 8,
+      runSpacing: 8,
       children: [
         FilledButton.tonalIcon(
           onPressed: isPaused && !canResume
@@ -331,6 +342,26 @@ class _TransferControls extends StatelessWidget {
           label: Text(l10n.cancel),
         ),
       ],
+    );
+  }
+}
+
+/// 排队文件的逐文件取消按键。
+class _QueuedFileControl extends StatelessWidget {
+  const _QueuedFileControl({required this.label, required this.onCancel});
+
+  final String label;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: onCancel,
+        icon: const Icon(Icons.remove_circle_outline_rounded, size: 18),
+        label: Text(label),
+      ),
     );
   }
 }
@@ -389,8 +420,10 @@ class _TransferAcceptanceControls extends StatelessWidget {
       );
     }
 
-    return Row(
+    // Wrap 而不是 Row：大字号或窄屏时按键换行，避免溢出条纹。
+    return Wrap(
       spacing: 8,
+      runSpacing: 8,
       children: [
         FilledButton.icon(
           onPressed: onAccept,
