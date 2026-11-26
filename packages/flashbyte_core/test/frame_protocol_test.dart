@@ -105,6 +105,70 @@ void main() {
       expect(mockSocket.tcpNoDelaySet, isTrue);
     });
   });
+
+  group('FrameWriter', () {
+    test('queues a control frame behind an in-flight data flush', () async {
+      final socket = _GuardedMockSocket();
+      final data = sendSocketFrame(
+        socket,
+        {'type': 'file_chunk'},
+        payloadBytes: Uint8List.fromList(List.filled(32, 7)),
+      );
+      final ping = sendControlFrame(socket, {'type': 'ping'});
+
+      await Future.wait([data, ping]);
+
+      expect(socket.written.length, greaterThan(0));
+      // The data frame is written first, then the ping frame.
+      final firstHeader = ByteData.sublistView(
+        Uint8List.fromList(socket.written),
+        0,
+        8,
+      );
+      final firstPayloadLength = firstHeader.getUint32(4, Endian.big);
+      expect(firstPayloadLength, 32);
+    });
+
+    test('propagates a write failure and remembers the failure', () async {
+      final socket = _GuardedMockSocket();
+      socket.fail = true;
+
+      await expectLater(
+        sendSocketFrame(socket, {'type': 'file_chunk'}),
+        throwsA(isA<FrameWriteException>()),
+      );
+      await expectLater(
+        sendControlFrame(socket, {'type': 'ping'}),
+        throwsA(isA<FrameWriteException>()),
+      );
+      expect(isFrameWriterFailed(socket), isTrue);
+    });
+  });
+}
+
+class _GuardedMockSocket {
+  final List<int> written = [];
+  bool fail = false;
+  bool _flushing = false;
+
+  void add(List<int> data) {
+    if (_flushing) {
+      throw StateError('StreamSink is bound to a stream');
+    }
+    if (fail) {
+      throw StateError('write failed');
+    }
+    written.addAll(data);
+  }
+
+  Future<void> flush() async {
+    if (fail) {
+      throw StateError('write failed');
+    }
+    _flushing = true;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    _flushing = false;
+  }
 }
 
 class _MockSocket {
