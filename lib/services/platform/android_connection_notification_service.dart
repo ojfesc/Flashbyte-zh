@@ -226,11 +226,15 @@ class AndroidConnectionNotificationService {
     _activeBatchIds.clear();
     if (fileIds.isEmpty) {
       _cancelActiveTransfer();
+      _startNewRequest();
       return;
     }
     for (final fileId in fileIds) {
       SocketService.instance.cancelTransfer(fileId);
+      // 立刻从正在传输的集合里移除，避免进度通知一直留在通知中心。
+      _completeTransfer({'fileId': fileId});
     }
+    _startNewRequest();
   }
 
   void _cancelActiveTransfer() {
@@ -386,13 +390,13 @@ class AndroidConnectionNotificationService {
       case 'send_start':
         if (message['pendingAcceptance'] == true) {
           // 请求开始时记下是单文件还是批量，通知按键据此选择“全部”还是单个。
+          // 等待批准的文件不算“正在传输”，否则取消后会留下一条进度通知。
           _requestIsBatch = message['isBatch'] == true;
           _startNewRequest();
           _showSenderPendingNotification(message);
           if (_requestIsBatch) {
             _requestBatchIds = List<String>.of(_pendingBatchIds);
           }
-          _startTransfer(message, isReceived: false);
         } else {
           _startTransfer(message, isReceived: false);
         }
@@ -543,6 +547,10 @@ class AndroidConnectionNotificationService {
       _progressNotificationTimer = null;
       unawaited(AwesomeNotifications().cancel(_progressNotificationId));
       unawaited(_showConnectionNotification());
+      // 本次请求结束，清掉批量标记，下一请求重新记录。
+      _requestIsBatch = false;
+      _requestBatchIds = [];
+      _finishedTransfers.clear();
     }
 
     if (_activeTransfers.isNotEmpty) {
@@ -746,8 +754,15 @@ class AndroidConnectionNotificationService {
   void _declinePendingOffer() {
     final fileId = _nextPendingOfferId();
     if (fileId == null) return;
-    SocketService.instance.declineTransfer(fileId);
+    // 批量请求逐个拒绝，对端才能把整批待批准状态清掉。
+    final targets = _pendingBatchIds.isNotEmpty
+        ? List<String>.of(_pendingBatchIds)
+        : [fileId];
+    for (final target in targets) {
+      SocketService.instance.declineTransfer(target);
+    }
     _clearPendingOfferGroup();
+    _startNewRequest();
   }
 
   void _cancelPendingOffer() {
@@ -759,9 +774,12 @@ class AndroidConnectionNotificationService {
     for (final fileId in List<String>.of(_pendingOffers)) {
       SocketService.instance.cancelTransfer(fileId);
     }
-    _pendingBatchIds.clear();
 
-    // 同时结束本次请求协商，让审批页等界面按“已取消”关闭。
+    // 同时收起待批准通知并清空本次请求记录，避免通知一直留在通知中心。
+    _clearPendingOfferGroup();
+    _startNewRequest();
+
+    // 结束本次请求协商，让审批页等界面按“已取消”关闭。
     unawaited(SocketService.instance.cancelOutgoingOffer());
   }
 
