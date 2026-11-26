@@ -70,7 +70,7 @@ class TransferWidget extends StatelessWidget {
       TransferStatus.pending => isReceived ? l10n.statusRequest : l10n.statusWaiting,
       TransferStatus.queued => '',
       TransferStatus.cancelled => l10n.statusCancelled,
-      TransferStatus.paused => l10n.statusPaused,
+      TransferStatus.paused => l10n.transferPaused,
       TransferStatus.completed =>
         isReceived ? l10n.statusReceived : l10n.statusSent,
       TransferStatus.inProgress =>
@@ -82,6 +82,8 @@ class TransferWidget extends StatelessWidget {
         ).textTheme.labelSmall!.copyWith(
           color: isCancelled
               ? colorScheme.error
+              : isPaused
+              ? colorScheme.tertiary
               : isFinished
               ? colorScheme.primary
               : Colors.white.withAlpha(100),
@@ -142,6 +144,8 @@ class TransferWidget extends StatelessWidget {
                         Icon(
                           isCancelled
                               ? Icons.block_rounded
+                              : isPaused
+                              ? Icons.pause_circle_outline_rounded
                               : isReceived
                               ? Icons.arrow_downward_rounded
                               : Icons.arrow_upward_rounded,
@@ -149,6 +153,8 @@ class TransferWidget extends StatelessWidget {
                           size: 15,
                           color: isCancelled
                               ? colorScheme.error
+                              : isPaused
+                              ? colorScheme.tertiary
                               : isFinished
                               ? colorScheme.primary
                               : Colors.white.withAlpha(100),
