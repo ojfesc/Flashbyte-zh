@@ -7,6 +7,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flashbyte/app/controllers/app_motion_controller.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/app_settings.dart';
+import 'package:flashbyte/app/device_name.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
@@ -27,7 +28,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:loading_indicator_m3e/loading_indicator_m3e.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class FileSelectionPage extends StatefulWidget {
   final int initialTabIndex;
@@ -346,11 +346,8 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     final modelName = await AppSettings.getDeviceModelName();
     _deviceModelName = modelName;
 
-    final prefs = await SharedPreferences.getInstance();
-    final savedName = prefs.getString(AppSettings.deviceNameKey);
-    final name = (savedName != null && savedName.isNotEmpty)
-        ? savedName
-        : modelName;
+    // 名称的唯一读取入口：空值时由 AppSettings 落盘默认型号名，页面不再自行读 prefs。
+    final name = await AppSettings.getDeviceName();
 
     final id = await AppSettings.getDeviceId();
     if (!mounted) return;
@@ -739,7 +736,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
 
   /// 把输入框里的名称保存到设置并刷新广播；空名称恢复为当前名称。
   Future<void> _persistDeviceNameDraft() async {
-    final name = _deviceNameController.text.trim();
+    final name = DeviceName.normalize(_deviceNameController.text);
     if (name.isEmpty) {
       _deviceNameController.text = deviceName ?? '';
       return;
@@ -754,12 +751,22 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   }
 
   Future<void> _saveDeviceName() async {
-    final name = _deviceNameController.text.trim();
-    if (name.isEmpty) {
+    final name = DeviceName.normalize(_deviceNameController.text);
+    final error = DeviceName.validate(name);
+    if (error != null) {
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
+      showScaffoldSnackbar(
+        error == DeviceNameError.empty
+            ? l10n.deviceNameEmpty
+            : l10n.deviceNameTooLong,
+      );
       return;
     }
 
     await AppSettings.setDeviceName(name);
+    // 已连接的对端也要立刻看到新名称，而不是等下一次重连。
+    SocketService.instance.updateDeviceName(name);
     if (!mounted) return;
     setState(() {
       deviceName = name;
@@ -1982,9 +1989,10 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                         ),
                       ),
                       Text(
-                        device.usesTls
-                            ? l10n.localReceiverSecure
-                            : l10n.localReceiver,
+                        // 同名设备（同型号手机很常见）用地址区分，避免选错接收方。
+                        '${device.address} · ${device.usesTls ? l10n.localReceiverSecure : l10n.localReceiver}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                           fontFeatures: const [
@@ -2087,12 +2095,22 @@ class _FileSelectionPageState extends State<FileSelectionPage>
                     controller: _deviceNameController,
                     focusNode: _deviceNameFocusNode,
                     enabled: deviceName != null && !_settingsLocked,
+                    maxLength: DeviceName.maxCharacters,
+                    maxLengthEnforcement: MaxLengthEnforcement.enforced,
+                    textInputAction: TextInputAction.done,
+                    // 换行与其它控制字符会破坏单行卡片、日志和通知，直接在输入层拦掉。
+                    inputFormatters: [
+                      FilteringTextInputFormatter.deny(
+                        RegExp(r'[\x00-\x1F\x7F]'),
+                      ),
+                    ],
                     onSubmitted: (_) => _commitDeviceName(),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer,
                     ),
                     decoration: InputDecoration(
                       isDense: true,
+                      counterText: '',
                       hintText: l10n.creatingYourName,
                       hintStyle: Theme.of(context).textTheme.titleMedium
                           ?.copyWith(
