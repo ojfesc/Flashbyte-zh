@@ -209,13 +209,13 @@ class TransferWidget extends StatelessWidget {
                               onPause: onPause,
                               onResume: onResume,
                               onCancel: onCancel,
-                              reducedMotion: reducedMotion,
                             ),
                           if (isPending)
                             _TransferAcceptanceControls(
                               isReceived: isReceived,
                               onAccept: onAccept,
                               onDecline: onDecline,
+                              onCancel: onCancel,
                             ),
                         ],
                       );
@@ -282,7 +282,6 @@ class _TransferControls extends StatelessWidget {
     required this.onPause,
     required this.onResume,
     required this.onCancel,
-    required this.reducedMotion,
   });
 
   final bool isPaused;
@@ -290,7 +289,6 @@ class _TransferControls extends StatelessWidget {
   final VoidCallback? onPause;
   final VoidCallback? onResume;
   final VoidCallback? onCancel;
-  final bool reducedMotion;
 
   @override
   Widget build(BuildContext context) {
@@ -317,61 +315,14 @@ class _TransferControls extends StatelessWidget {
                 : l10n.pause,
           ),
         ),
-        FilledButton(
+        FilledButton.icon(
           style: FilledButton.styleFrom(
-            padding: EdgeInsets.zero,
             backgroundColor: colorScheme.errorContainer,
             foregroundColor: colorScheme.onErrorContainer,
-            disabledBackgroundColor: Colors.transparent,
-            disabledForegroundColor: Colors.transparent,
           ),
-          onPressed: isPaused ? onCancel : null,
-          child: reducedMotion
-              ? AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 160),
-                  switchInCurve: Curves.easeOut,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: child,
-                  ),
-                  child: isPaused
-                      ? Padding(
-                          key: const ValueKey('cancel-visible'),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            spacing: 8,
-                            children: [
-                              const Icon(Icons.close_rounded),
-                              Text(l10n.cancel),
-                            ],
-                          ),
-                        )
-                      : const SizedBox(
-                          key: ValueKey('cancel-hidden'),
-                          width: 0,
-                          height: 24,
-                        ),
-                )
-              : AnimatedSize(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.centerLeft,
-                  child: isPaused
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            spacing: 8,
-                            children: [
-                              const Icon(Icons.close_rounded),
-                              Text(l10n.cancel),
-                            ],
-                          ),
-                        )
-                      : const SizedBox(width: 0, height: 24),
-                ),
+          onPressed: onCancel,
+          icon: const Icon(Icons.close_rounded),
+          label: Text(l10n.cancel),
         ),
       ],
     );
@@ -383,21 +334,24 @@ class _TransferAcceptanceControls extends StatelessWidget {
     required this.isReceived,
     required this.onAccept,
     required this.onDecline,
+    required this.onCancel,
   });
 
   final bool isReceived;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final colorScheme = Theme.of(context).colorScheme;
 
+    // 发送方等待接收：卡片里显示等待状态和“取消”，取消由该文件自己的取消回调处理。
     if (!isReceived) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
         decoration: BoxDecoration(
           color: colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(14),
@@ -414,6 +368,15 @@ class _TransferAcceptanceControls extends StatelessWidget {
                 l10n.waitingForReceiverToAccept,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            ),
+            FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                backgroundColor: colorScheme.errorContainer,
+                foregroundColor: colorScheme.onErrorContainer,
+              ),
+              onPressed: onCancel,
+              icon: const Icon(Icons.close_rounded),
+              label: Text(l10n.cancel),
             ),
           ],
         ),
