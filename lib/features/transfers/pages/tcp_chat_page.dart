@@ -5,6 +5,7 @@ import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
+import 'package:flashbyte/services/platform/android_document_service.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
@@ -888,8 +889,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 多选文件后逐个排队发送；每个文件都是独立的单文件请求。
   Future<void> _pickFilesToSend() async {
-    final pickedFiles = await FastFilePicker.pickMultipleFiles();
-    if (!mounted || pickedFiles == null || pickedFiles.isEmpty) return;
+    // Android 用系统文档选择器拿 content:// URI，不再经过会复制整个文件的插件。
+    final pickedFiles = Platform.isAndroid
+        ? await AndroidDocumentService.instance.pickDocuments()
+        : await FastFilePicker.pickMultipleFiles() ??
+              const <FastFilePickerPath>[];
+    if (!mounted || pickedFiles.isEmpty) return;
 
     final locations = <String>[];
     for (final pickedFile in pickedFiles) {
