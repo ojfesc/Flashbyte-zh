@@ -694,63 +694,48 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  /// 底部按键：按“单文件/多文件”“等待接收/正在传输”和收发方向决定。
+  /// 底部按键只处理批量请求；单文件的暂停/取消/接收都在文件卡片上。
   ///
   /// - 多文件等待接收：发送方“全部取消”，接收方“全部接收 / 全部拒绝”。
   /// - 多文件正在传输：双方“全部暂停（全部继续）/ 全部取消”。
-  /// - 单文件等待接收：只有发送方一个“取消”，接收方用文件卡片上的按键。
-  /// - 单文件正在传输：双方都不用底部按键，用文件卡片上的暂停/取消。
   Widget? _buildRequestControls() {
-    if (!_requestBusy) {
+    if (!_requestBusy || !_requestIsMulti) {
       return null;
     }
     final l10n = AppLocalizations.of(context);
-    if (_requestIsMulti) {
-      if (_requestInTransfer) {
-        final allPaused = _allPaused(_requestWidgets);
-        return _requestButtonRow([
-          _requestPrimaryButton(
-            icon: allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            label: allPaused ? l10n.resumeAll : l10n.pauseAll,
-            onPressed: _toggleAllPaused,
-          ),
-          _requestSecondaryButton(
-            icon: Icons.close_rounded,
-            label: l10n.cancelAll,
-            onPressed: _cancelAllTransfers,
-          ),
-        ]);
-      }
-      if (_requestIsReceiver) {
-        return _requestButtonRow([
-          _requestPrimaryButton(
-            icon: Icons.download_rounded,
-            label: l10n.acceptAll,
-            onPressed: _acceptAllRequest,
-          ),
-          _requestSecondaryButton(
-            icon: Icons.block_rounded,
-            label: l10n.declineAll,
-            onPressed: _declineAllRequest,
-          ),
-        ]);
-      }
+    if (_requestInTransfer) {
+      final allPaused = _allPaused(_requestWidgets);
       return _requestButtonRow([
+        _requestPrimaryButton(
+          icon: allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+          label: allPaused ? l10n.resumeAll : l10n.pauseAll,
+          onPressed: _toggleAllPaused,
+        ),
         _requestSecondaryButton(
           icon: Icons.close_rounded,
           label: l10n.cancelAll,
-          onPressed: _cancelRequest,
+          onPressed: _cancelAllTransfers,
         ),
       ]);
     }
-
-    if (_requestInTransfer || _requestIsReceiver) {
-      return null;
+    if (_requestIsReceiver) {
+      return _requestButtonRow([
+        _requestPrimaryButton(
+          icon: Icons.download_rounded,
+          label: l10n.acceptAll,
+          onPressed: _acceptAllRequest,
+        ),
+        _requestSecondaryButton(
+          icon: Icons.block_rounded,
+          label: l10n.declineAll,
+          onPressed: _declineAllRequest,
+        ),
+      ]);
     }
     return _requestButtonRow([
       _requestSecondaryButton(
         icon: Icons.close_rounded,
-        label: l10n.cancel,
+        label: l10n.cancelAll,
         onPressed: _cancelRequest,
       ),
     ]);
