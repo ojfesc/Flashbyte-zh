@@ -268,6 +268,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
             _setTransferProgress(
               message['fileId'] as String?,
               (message['progress'] as num?)?.toDouble(),
+              estimated: message['estimated'] == true,
             );
             break;
           case 'send_complete':
@@ -1580,7 +1581,11 @@ class _TcpChatPageState extends State<TcpChatPage> {
     return _fileTransferWidgets.value.any((widget) => widget.uuid == uuid);
   }
 
-  void _setTransferProgress(String? uuid, double? progress) {
+  void _setTransferProgress(
+    String? uuid,
+    double? progress, {
+    bool estimated = false,
+  }) {
     if (uuid == null || progress == null) {
       return;
     }
@@ -1588,9 +1593,13 @@ class _TcpChatPageState extends State<TcpChatPage> {
     if (notifier == null) {
       return;
     }
+    // estimated 是发送端按“已写入 socket”算出的估算值，会领先对端真正落盘的字节数；
+    // 卡片按接收端回报的实测值显示，估算值不参与，避免显示比实际接收更靠前。
+    if (estimated) {
+      return;
+    }
     final next = progress.clamp(0.0, 1.0);
-    // 发送端估算（已写入 socket）与接收端实测（已落盘）交替到达，两者不同步；
-    // 只接受向前的数值，否则卡片进度条会周期性地倒退再前进。
+    // 实测值仍然只允许前进：迟到或乱序的旧值不能把进度条拉回去。
     if (next <= notifier.value) {
       return;
     }
