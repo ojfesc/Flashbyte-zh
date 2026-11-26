@@ -294,7 +294,7 @@ class SocketService {
     _toIsolateSendPort!.send({
       'command': 'send_file',
       'filePath': filePath,
-      if (displayName != null) 'displayName': displayName,
+      'displayName': ?displayName,
       'clipboard': clipboard,
     });
   }
