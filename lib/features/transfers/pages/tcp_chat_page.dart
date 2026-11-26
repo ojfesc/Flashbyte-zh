@@ -53,6 +53,12 @@ class _TcpChatPageState extends State<TcpChatPage> {
   bool _suppressNextConnectionIssueAfterCancellation = false;
   bool _fatalErrorReceived = false;
   _SessionIssue? _sessionIssue;
+
+  /// 当前文件请求包含的文件 id（按发送顺序）。请求结束后清空。
+  List<String> _requestFileIds = [];
+
+  /// 当前请求是否已被接受；批量请求在文件之间短暂没有“传输中”卡片时仍按传输中处理。
+  bool _requestAccepted = false;
   Map<String, dynamic>? _peerInfo;
 
   StreamSubscription? _streamSubscription;
@@ -85,7 +91,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
             );
             return;
           }
-          SocketService.instance.sendFilesSeparately(locations);
+          _sendLocations(locations);
           final l10n = AppLocalizations.of(context);
           final peerName = _peerName(context);
           showScaffoldSnackbar(
@@ -97,6 +103,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
     if (widget.initialBatchFiles != null &&
         widget.initialBatchFiles!.isNotEmpty) {
+      _requestFileIds = [
+        for (final file in widget.initialBatchFiles!)
+          if (file['fileId'] is String) file['fileId'] as String,
+      ];
       for (final file in widget.initialBatchFiles!) {
         _prepopulateBatchWidget(file);
       }
@@ -119,7 +129,10 @@ class _TcpChatPageState extends State<TcpChatPage> {
             _handleDisconnectAfterCancellationWindow();
             break;
           case 'start':
-            if (message['isBatch'] == true) break;
+            if (message['isBatch'] == true) {
+              _handleIncomingBatch(message);
+              break;
+            }
             final fileId = message['fileId'] as String?;
             if (fileId == null) break;
 
@@ -127,6 +140,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
               final senderFingerprint =
                   SocketService.instance.connectedPeerInfo?['certFingerprint']
                       as String?;
+              _startSingleRequest(fileId);
               if (TrustedDevicesService.instance.isTrusted(senderFingerprint)) {
                 SocketService.instance.acceptTransfer(fileId);
                 break;
@@ -148,6 +162,8 @@ class _TcpChatPageState extends State<TcpChatPage> {
               break;
             }
 
+            _requestAccepted = true;
+            _trackActiveFile(fileId);
             setState(() {
               isSharingInProgress = true;
             });
@@ -178,23 +194,40 @@ class _TcpChatPageState extends State<TcpChatPage> {
             setState(() {
               isSharingInProgress = false;
             });
+            _finishRequestIfSettled();
             break;
           case 'send_start':
             final sendFileId = message['fileId'] as String?;
             if (sendFileId == null) break;
+            final needsAccept = message['pendingAcceptance'] == true;
+            final sendIsBatch = message['isBatch'] == true;
             if (isSharingInProgress == true &&
-                message['pendingAcceptance'] != true &&
+                !needsAccept &&
                 !_hasTransferWidget(sendFileId)) {
               break;
+            }
+
+            if (needsAccept) {
+              if (sendIsBatch) {
+                if (_requestFileIds.isEmpty) {
+                  _requestAccepted = false;
+                }
+                if (!_requestFileIds.contains(sendFileId)) {
+                  _requestFileIds = [..._requestFileIds, sendFileId];
+                }
+              } else {
+                _startSingleRequest(sendFileId);
+              }
+            } else {
+              _requestAccepted = true;
+              _trackActiveFile(sendFileId);
             }
 
             setState(() {
               isSharingInProgress = true;
             });
 
-            final isBatch = message['isBatch'] == true;
-            final needsAccept = message['pendingAcceptance'] == true;
-            final transferStatus = isBatch && needsAccept
+            final transferStatus = sendIsBatch && needsAccept
                 ? TransferStatus.queued
                 : needsAccept
                 ? TransferStatus.pending
@@ -224,6 +257,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
             setState(() {
               isSharingInProgress = false;
             });
+            _finishRequestIfSettled();
             break;
           case 'transfer_paused':
             _updateTransferStatus(
@@ -240,21 +274,21 @@ class _TcpChatPageState extends State<TcpChatPage> {
             );
             break;
           case 'transfer_accepted':
+            _requestAccepted = true;
             _updateTransferStatus(
               message['fileId'] as String?,
               TransferStatus.inProgress,
             );
             break;
           case 'transfer_cancelled':
-            _updateTransferStatus(
-              message['fileId'] as String?,
-              TransferStatus.cancelled,
-            );
+          case 'transfer_declined':
+            _handleRequestCancelled(message['fileId'] as String?);
             break;
           case 'transfer_cancel_ready':
             setState(() {
               isSharingInProgress = false;
             });
+            _finishRequestIfSettled();
             if (_suppressNextConnectionIssueAfterCancellation) {
               Future<void>.delayed(const Duration(seconds: 2), () {
                 _suppressNextConnectionIssueAfterCancellation = false;
@@ -415,20 +449,29 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                   Expanded(
                                     child: ValueListenableBuilder(
                                       valueListenable: isDisconnected,
-                                      builder: (context, value, child) => Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
-                                        spacing: 10,
-                                        children: [
-                                          // 传输中在状态按键上方提供整批操作。
-                                          if (!value && isSharingInProgress)
-                                            _buildBatchTransferControls(),
-                                          _buildTransferActions(
-                                            isConnectionLost: value,
+                                      builder: (context, disconnected, child) =>
+                                          ValueListenableBuilder(
+                                            valueListenable:
+                                                _fileTransferWidgets,
+                                            builder: (context, widgets, child) {
+                                              final controls = disconnected
+                                                  ? null
+                                                  : _buildRequestControls();
+                                              return Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.stretch,
+                                                spacing: 10,
+                                                children: [
+                                                  if (controls != null) controls,
+                                                  _buildTransferActions(
+                                                    isConnectionLost:
+                                                        disconnected,
+                                                  ),
+                                                ],
+                                              );
+                                            },
                                           ),
-                                        ],
-                                      ),
                                     ),
                                   ),
                                 ],
@@ -651,72 +694,129 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  /// 传输中显示的整批操作：全部暂停（全部暂停后变为全部继续）、全部取消。
-  Widget _buildBatchTransferControls() {
-    return ValueListenableBuilder<List<TransferWidget>>(
-      valueListenable: _fileTransferWidgets,
-      builder: (context, widgets, child) {
-        final l10n = AppLocalizations.of(context);
-        final allPaused = _allPaused(widgets);
-        return Row(
-          spacing: 10,
-          children: [
-            Expanded(
-              child: FilledButton.tonalIcon(
-                onPressed: _toggleAllPaused,
-                icon: Icon(
-                  allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                ),
-                label: Text(allPaused ? l10n.resumeAll : l10n.pauseAll),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(44),
-                ),
-              ),
-            ),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _cancelAllTransfers,
-                icon: const Icon(Icons.close_rounded),
-                label: Text(l10n.cancelAll),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(44),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+  /// 底部按键：按“单文件/多文件”“等待接收/正在传输”和收发方向决定。
+  ///
+  /// - 多文件等待接收：发送方“全部取消”，接收方“全部接收 / 全部拒绝”。
+  /// - 多文件正在传输：双方“全部暂停（全部继续）/ 全部取消”。
+  /// - 单文件等待接收：只有发送方一个“取消”，接收方用文件卡片上的按键。
+  /// - 单文件正在传输：双方都不用底部按键，用文件卡片上的暂停/取消。
+  Widget? _buildRequestControls() {
+    if (!_requestBusy) {
+      return null;
+    }
+    final l10n = AppLocalizations.of(context);
+    if (_requestIsMulti) {
+      if (_requestInTransfer) {
+        final allPaused = _allPaused(_requestWidgets);
+        return _requestButtonRow([
+          _requestPrimaryButton(
+            icon: allPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            label: allPaused ? l10n.resumeAll : l10n.pauseAll,
+            onPressed: _toggleAllPaused,
+          ),
+          _requestSecondaryButton(
+            icon: Icons.close_rounded,
+            label: l10n.cancelAll,
+            onPressed: _cancelAllTransfers,
+          ),
+        ]);
+      }
+      if (_requestIsReceiver) {
+        return _requestButtonRow([
+          _requestPrimaryButton(
+            icon: Icons.download_rounded,
+            label: l10n.acceptAll,
+            onPressed: _acceptAllRequest,
+          ),
+          _requestSecondaryButton(
+            icon: Icons.block_rounded,
+            label: l10n.declineAll,
+            onPressed: _declineAllRequest,
+          ),
+        ]);
+      }
+      return _requestButtonRow([
+        _requestSecondaryButton(
+          icon: Icons.close_rounded,
+          label: l10n.cancelAll,
+          onPressed: _cancelRequest,
+        ),
+      ]);
+    }
+
+    if (_requestInTransfer || _requestIsReceiver) {
+      return null;
+    }
+    return _requestButtonRow([
+      _requestSecondaryButton(
+        icon: Icons.close_rounded,
+        label: l10n.cancel,
+        onPressed: _cancelRequest,
+      ),
+    ]);
+  }
+
+  Widget _requestButtonRow(List<Widget> buttons) {
+    return Row(
+      spacing: 10,
+      children: [for (final button in buttons) Expanded(child: button)],
     );
   }
 
-  /// 空闲时显示三个发送入口；传输中或连接断开时显示一个不可点击的状态按键。
+  Widget _requestPrimaryButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return FilledButton.tonalIcon(
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
+      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+    );
+  }
+
+  Widget _requestSecondaryButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+    );
+  }
+
+  /// 空闲时显示三个发送入口；连接断开、传输中、等待批准时显示状态区。
   ///
-  /// 连接断开后按键直接显示结果：打断过未完成的传输时显示“传输被中断”，
+  /// 连接断开后直接显示结果：打断过未完成的传输时显示“传输被中断”，
   /// 传输都已结束时显示“连接已断开”。
   Widget _buildTransferActions({required bool isConnectionLost}) {
     final l10n = AppLocalizations.of(context);
-    if (isConnectionLost || isSharingInProgress) {
-      final interrupted =
-          isConnectionLost &&
-          _sessionIssue == _SessionIssue.transferInterrupted;
-      final icon = isConnectionLost
-          ? interrupted
-              ? Icons.sync_problem_rounded
-              : Icons.link_off_rounded
-          : Icons.hourglass_top_rounded;
-      final title = isConnectionLost
-          ? interrupted
-              ? l10n.transferInterrupted
-              : l10n.connectionLost
-          : l10n.transferInProgress;
+    if (isConnectionLost) {
+      final interrupted = _sessionIssue == _SessionIssue.transferInterrupted;
       return _buildTransferStatusButton(
-        icon: icon,
-        title: title,
-        subtitle: isConnectionLost
-            ? l10n.reconnectToSendMore
-            : l10n.waitForTransferToFinish,
-        disconnected: isConnectionLost,
+        icon: interrupted
+            ? Icons.sync_problem_rounded
+            : Icons.link_off_rounded,
+        title: interrupted ? l10n.transferInterrupted : l10n.connectionLost,
+        subtitle: l10n.reconnectToSendMore,
+        disconnected: true,
       );
+    }
+    if (_requestInTransfer) {
+      return _buildTransferStatusButton(
+        icon: Icons.hourglass_top_rounded,
+        title: l10n.transferInProgress,
+        subtitle: l10n.waitForTransferToFinish,
+        disconnected: false,
+      );
+    }
+    if (_requestBusy || isSharingInProgress) {
+      // 等待接收方批准或等待接收：底部只放请求按键，不显示发送入口。
+      return const SizedBox.shrink();
     }
 
     final colorScheme = Theme.of(context).colorScheme;
@@ -870,7 +970,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       final location = _pickedFileLocation(file);
       if (location != null) locations.add(location);
     }
-    SocketService.instance.sendFilesSeparately(locations);
+    _sendLocations(locations);
   }
 
   String _peerName(BuildContext context) {
@@ -887,7 +987,19 @@ class _TcpChatPageState extends State<TcpChatPage> {
         : pickedFile.path;
   }
 
-  /// 多选文件后逐个排队发送；每个文件都是独立的单文件请求。
+  /// 一个文件走单文件请求；多个文件合成一次批量请求，接收方一次批准整批。
+  void _sendLocations(List<String> locations) {
+    if (locations.isEmpty) {
+      return;
+    }
+    if (locations.length == 1) {
+      SocketService.instance.sendFile(locations.first);
+      return;
+    }
+    SocketService.instance.sendFiles(locations);
+  }
+
+  /// 多选文件后发送：选一个发单文件请求，选多个发一次批量请求。
   Future<void> _pickFilesToSend() async {
     // Android 用系统文档选择器拿 content:// URI，不再经过会复制整个文件的插件。
     final pickedFiles = Platform.isAndroid
@@ -907,7 +1019,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
       );
       return;
     }
-    SocketService.instance.sendFilesSeparately(locations);
+    _sendLocations(locations);
   }
 
   /// 把粘贴板文本写成临时文件后按普通文件发送，接收端会写回粘贴板。
@@ -926,7 +1038,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
     );
   }
 
-  /// 选择文件夹并把其中所有文件逐个加入发送队列。
+  /// 选择文件夹并把其中的文件作为一次批量请求发送。
   Future<void> _sendFolder() async {
     final l10n = AppLocalizations.of(context);
     try {
@@ -943,9 +1055,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
           showScaffoldSnackbar(l10n.noFilesInSelectedFolder);
           return;
         }
-        SocketService.instance.sendFilesSeparately([
-          for (final document in documents) document.uri,
-        ]);
+        _sendLocations([for (final document in documents) document.uri]);
         return;
       }
 
@@ -974,7 +1084,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
         }
         return;
       }
-      SocketService.instance.sendFilesSeparately(paths);
+      _sendLocations(paths);
     } catch (_) {
       if (mounted) {
         showScaffoldSnackbar(l10n.cannotReadFolder);
@@ -1259,7 +1369,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   /// 全部暂停与全部继续的切换，按钮文案由 [_allPaused] 决定。
   void _toggleAllPaused() {
-    final widgets = _fileTransferWidgets.value;
+    final widgets = _requestWidgets;
     final resume = _allPaused(widgets);
     for (final widget in widgets) {
       if (widget.status == TransferStatus.completed ||
@@ -1282,17 +1392,170 @@ class _TcpChatPageState extends State<TcpChatPage> {
     }
   }
 
-  /// 取消所有尚未结束的传输；发送方向按用户取消处理，避免被当成连接异常。
+  /// 取消当前请求里尚未结束的传输；发送方向按用户取消处理。
   void _cancelAllTransfers() {
     // 先丢弃还没开始发送的排队文件，避免取消后它们又一个个发出去。
     SocketService.instance.cancelQueuedSends();
-    for (final widget in _fileTransferWidgets.value) {
+    for (final widget in _requestWidgets) {
       if (widget.status == TransferStatus.completed ||
           widget.status == TransferStatus.cancelled) {
         continue;
       }
       _cancelTransfer(widget.uuid, isReceived: widget.isReceived);
     }
+  }
+
+  /// 当前请求的文件卡片（按发送顺序）。
+  List<TransferWidget> get _requestWidgets {
+    final ids = _requestFileIds.toSet();
+    return [
+      for (final widget in _fileTransferWidgets.value)
+        if (ids.contains(widget.uuid)) widget,
+    ];
+  }
+
+  bool get _requestHasActive => _requestWidgets.any(
+    (widget) =>
+        widget.status == TransferStatus.inProgress ||
+        widget.status == TransferStatus.paused,
+  );
+
+  /// 当前请求是否处于传输阶段：已接受但文件之间短暂没有传输中卡片时也算。
+  bool get _requestInTransfer =>
+      _requestHasActive || (_requestAccepted && _requestHasPending);
+
+  bool get _requestHasPending => _requestWidgets.any(
+    (widget) =>
+        widget.status == TransferStatus.pending ||
+        widget.status == TransferStatus.queued,
+  );
+
+  bool get _requestBusy => _requestHasPending || _requestHasActive;
+
+  bool get _requestIsMulti => _requestFileIds.length > 1;
+
+  bool get _requestIsReceiver =>
+      _requestWidgets.isNotEmpty && _requestWidgets.first.isReceived;
+
+  /// 单文件请求：请求里只有这个文件。
+  void _startSingleRequest(String fileId) {
+    _requestFileIds = [fileId];
+  }
+
+  /// 文件开始传输：请求里没有记录时补上，保证底部按当前请求显示。
+  void _trackActiveFile(String fileId) {
+    if (_requestFileIds.contains(fileId)) {
+      return;
+    }
+    _requestFileIds = [fileId];
+  }
+
+  /// 请求全部完成或取消后清空，底部恢复发送入口。
+  void _finishRequestIfSettled() {
+    if (_requestBusy || _requestFileIds.isEmpty) {
+      return;
+    }
+    setState(() {
+      _requestFileIds = [];
+      _requestAccepted = false;
+    });
+  }
+
+  /// 会话页里直接收到批量请求（file_batch）时，为整批建卡片并等待“全部接收”。
+  void _handleIncomingBatch(Map<String, dynamic> message) {
+    final rawFiles = message['files'];
+    if (rawFiles is! List || rawFiles.isEmpty) {
+      return;
+    }
+    final files = <Map<String, dynamic>>[];
+    for (final file in rawFiles) {
+      if (file is Map && file['fileId'] is String) {
+        files.add(Map<String, dynamic>.from(file));
+      }
+    }
+    if (files.isEmpty) {
+      return;
+    }
+
+    final fileIds = [for (final file in files) file['fileId'] as String];
+    final senderFingerprint = SocketService.instance
+        .connectedPeerInfo?['certFingerprint'] as String?;
+    final trusted = TrustedDevicesService.instance.isTrusted(senderFingerprint);
+
+    setState(() {
+      _requestFileIds = fileIds;
+      _requestAccepted = false;
+      isSharingInProgress = true;
+    });
+    for (final file in files) {
+      addFileWidget(
+        filePath: '',
+        fileName: (file['fileName'] as String?) ?? '',
+        fileSize: sizeConvert(((file['fileSize'] as int?) ?? 0).toDouble()),
+        uuid: file['fileId'] as String,
+        isReceived: true,
+        clipboard: file['clipboard'] == true,
+        status: TransferStatus.queued,
+      );
+    }
+    if (trusted) {
+      SocketService.instance.acceptTransfer(fileIds.first);
+    }
+  }
+
+  /// 请求被拒绝或被取消：批量请求的第一个文件结束即视为整批结束。
+  void _handleRequestCancelled(String? fileId) {
+    if (fileId == null) {
+      return;
+    }
+    _updateTransferStatus(fileId, TransferStatus.cancelled);
+    if (_requestIsMulti && _requestFileIds.first == fileId) {
+      _cancelRequestCards();
+      return;
+    }
+    _finishRequestIfSettled();
+  }
+
+  /// 接收方“全部接收”：接受批量请求的第一个文件，发送方随后依次发送整批。
+  void _acceptAllRequest() {
+    if (_requestFileIds.isEmpty) {
+      return;
+    }
+    setState(() {
+      _requestAccepted = true;
+    });
+    SocketService.instance.acceptTransfer(_requestFileIds.first);
+  }
+
+  /// 接收方“全部拒绝”：拒绝第一个文件即可让发送方放弃整批。
+  void _declineAllRequest() {
+    if (_requestFileIds.isEmpty) {
+      return;
+    }
+    SocketService.instance.declineTransfer(_requestFileIds.first);
+    _cancelRequestCards();
+  }
+
+  /// 发送方“取消 / 全部取消”：结束当前请求，整批随之作废。
+  void _cancelRequest() {
+    if (_requestFileIds.isEmpty) {
+      return;
+    }
+    SocketService.instance.cancelQueuedSends();
+    _cancelTransfer(_requestFileIds.first, isReceived: false);
+    _cancelRequestCards();
+  }
+
+  /// 把当前请求剩下的卡片标记为已取消，避免界面停在等待状态。
+  void _cancelRequestCards() {
+    for (final fileId in _requestFileIds) {
+      _updateTransferStatus(fileId, TransferStatus.cancelled);
+    }
+    setState(() {
+      _requestAccepted = false;
+      isSharingInProgress = false;
+    });
+    _finishRequestIfSettled();
   }
 
   Future<void> _handleDisconnectAfterCancellationWindow() async {
