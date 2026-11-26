@@ -1107,7 +1107,9 @@ Future<void> _sendFileSequentially({
   required bool Function(String fileId) shouldCancelTransfer,
   Future<void> Function(String fileId)? onPaused,
 }) async {
-  const int chunkSize = 65536;
+  // 每次发送 1 MB：帧头、JSON 元数据和 flush 的开销按块数计，块太小会把
+  // 大文件的吞吐压下来（64 KB 时每 MB 有 16 次编码 + 16 次 flush）。
+  const int chunkSize = 1024 * 1024;
   if (fileSize <= 0) {
     return;
   }
@@ -1187,31 +1189,16 @@ Future<void> _sendChunksSequentially({
   required bool Function(String fileId) shouldCancelTransfer,
   Future<void> Function(String fileId)? onPaused,
 }) async {
+  // 文档流每次给的数据量不定（常见 8~64 KB），攒到 1 MB 再发，减少帧数与 flush 次数。
+  const int sendBatchBytes = 1024 * 1024;
   var lastPauseNoticeAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final pending = BytesBuilder(copy: false);
 
-  await for (final rawChunk in chunks) {
-    if (rawChunk.isEmpty) {
-      continue;
+  Future<void> flushPending() async {
+    if (pending.isEmpty) {
+      return;
     }
-    while (!shouldCancel() &&
-        !shouldCancelTransfer(fileId) &&
-        shouldPauseTransfer(fileId)) {
-      final now = DateTime.now();
-      if (onPaused != null &&
-          now.difference(lastPauseNoticeAt) >=
-              const Duration(milliseconds: 500)) {
-        lastPauseNoticeAt = now;
-        await onPaused(fileId);
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-    }
-    if (shouldCancel() || shouldCancelTransfer(fileId)) {
-      throw const core.TransferCancelled();
-    }
-
-    final chunk = rawChunk is Uint8List
-        ? rawChunk
-        : Uint8List.fromList(rawChunk);
+    final chunk = pending.takeBytes();
     await core.sendSocketFrame(
       clientSocket,
       {
@@ -1220,6 +1207,38 @@ Future<void> _sendChunksSequentially({
       },
       payloadBytes: chunk,
     );
+  }
+
+  try {
+    await for (final rawChunk in chunks) {
+      if (rawChunk.isEmpty) {
+        continue;
+      }
+      while (!shouldCancel() &&
+          !shouldCancelTransfer(fileId) &&
+          shouldPauseTransfer(fileId)) {
+        final now = DateTime.now();
+        if (onPaused != null &&
+            now.difference(lastPauseNoticeAt) >=
+                const Duration(milliseconds: 500)) {
+          lastPauseNoticeAt = now;
+          await onPaused(fileId);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+      if (shouldCancel() || shouldCancelTransfer(fileId)) {
+        throw const core.TransferCancelled();
+      }
+
+      pending.add(rawChunk is Uint8List ? rawChunk : Uint8List.fromList(rawChunk));
+      if (pending.length >= sendBatchBytes) {
+        await flushPending();
+      }
+    }
+    await flushPending();
+  } finally {
+    // 取消时丢掉还没发出的数据，不把半截缓冲写出去。
+    pending.clear();
   }
 }
 
@@ -2071,11 +2090,15 @@ Future<String> _resolveDownloadDirectory({String? commandDirectory}) async {
 }
 
 /// SAF-specific output target (platform-dependent, kept in app layer).
+///
+/// 数据先攒到 [_safWriteBatchBytes] 再交给插件：插件每收到一次写入都要跨一次
+/// 平台通道并复制数据，按小片提交会把大文件的写入速度压得很低。
 core.OutputTarget _createSafOutputTarget({
   required String directoryUri,
   required String fileName,
   required String mimeType,
 }) {
+  const int safWriteBatchBytes = 1024 * 1024;
   final controller = StreamController<List<int>>();
   final saf = Saf();
   final writeFuture = saf.writeFileStream(
@@ -2084,15 +2107,31 @@ core.OutputTarget _createSafOutputTarget({
     mimeType,
     controller.stream,
   );
+  final pending = BytesBuilder(copy: false);
+
+  void flushPending() {
+    if (pending.isEmpty) {
+      return;
+    }
+    controller.add(pending.takeBytes());
+  }
+
   return core.OutputTarget.custom(
     fileName: fileName,
     filePath: '$directoryUri/$fileName',
-    writeChunk: (data) => controller.add(data),
+    writeChunk: (data) {
+      pending.add(data);
+      if (pending.length >= safWriteBatchBytes) {
+        flushPending();
+      }
+    },
     closeWriter: () async {
+      flushPending();
       await controller.close();
       await writeFuture;
     },
     deleteFile: () async {
+      pending.clear();
       await controller.close();
       try {
         final entity = await writeFuture;
