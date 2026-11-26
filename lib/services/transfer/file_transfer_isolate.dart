@@ -684,6 +684,7 @@ Future<String?> _sendFileCommand(
   final displayName = command['displayName'] as String?;
   final clipboard = command['clipboard'] == true;
   File? fileToSend;
+  Stream<List<int>>? chunksToSend;
   Map<String, dynamic>? fileHeader;
 
   final stopwatch = Stopwatch()..start();
@@ -698,6 +699,7 @@ Future<String?> _sendFileCommand(
         throw Exception('Could not read selected file metadata.');
       }
       fileToSend = source.file;
+      chunksToSend = source.chunks;
 
       fileHeader = {
         'uuid': Uuid().v4(),
@@ -768,6 +770,7 @@ Future<String?> _sendFileCommand(
     await _sendFileSequentially(
       fileId: fileId,
       file: fileToSend,
+      chunks: chunksToSend,
       fileSize: fileHeader['size'] as int,
       clientSocket: clientSocket,
       shouldCancel: shouldCancel,
@@ -960,7 +963,8 @@ Future<String?> _sendBatchCommand(
       try {
         await _sendFileSequentially(
           fileId: fileId,
-          file: entry.file,
+          file: entry.source.file,
+          chunks: entry.source.chunks,
           fileSize: entry.header['size'] as int,
           clientSocket: clientSocket,
           shouldCancel: shouldCancel,
@@ -1018,26 +1022,26 @@ class _FileEntry {
     required this.header,
     required this.filePath,
   });
-
-  File get file => source.file;
 }
 
-/// A readable source file for an outgoing transfer plus any resources that
-/// must be released once the transfer finishes.
+/// 一个待发送文件的读取来源，以及传输结束后要释放的资源。
+///
+/// content:// 文档要么能直接按文件描述符读（[file]），要么只能按块流式读
+/// （[chunks]）；两者都不会把整个文件复制到缓存目录。
 class _SendSource {
   const _SendSource({
-    required this.file,
     required this.fileName,
     required this.fileSize,
+    this.file,
+    this.chunks,
     this.fd,
-    this.tempCopyPath,
   });
 
-  final File file;
   final String fileName;
   final int fileSize;
+  final File? file;
+  final Stream<List<int>>? chunks;
   final int? fd;
-  final String? tempCopyPath;
 
   Future<void> dispose() async {
     final fd = this.fd;
@@ -1046,26 +1050,15 @@ class _SendSource {
         await Saf().closeFileDescriptor(fd);
       } on Exception catch (_) {}
     }
-    final tempCopyPath = this.tempCopyPath;
-    if (tempCopyPath != null) {
-      try {
-        final copy = File(tempCopyPath);
-        if (await copy.exists()) {
-          await copy.delete();
-        }
-      } on Exception catch (_) {}
-    }
   }
 }
 
-/// Opens a readable source for an Android SAF document.
+/// 打开一个 Android SAF 文档作为发送来源。
 ///
-/// [Saf.openFileDescriptor] hands out a `/proc/self/fd/<fd>` pseudo-path that
-/// dart:io can usually open directly. Some OEM builds (e.g. Realme UI 6 on
-/// Android 15) ship SELinux policies that deny open(2) on proc fd links, so
-/// opening fails with `Permission denied` (errno 13). The pseudo-path is
-/// probed first and, when the OS refuses, the document is streamed into a
-/// cache file via [Saf.readFileStream] and that copy is sent instead.
+/// [Saf.openFileDescriptor] 给出的 `/proc/self/fd/<fd>` 伪路径大多数设备能直接读；
+/// 部分 OEM（例如 Realme UI 6 / Android 15）的 SELinux 策略会拒绝，此时退回按块
+/// 流式读取（[Saf.readFileStream]），不再把整个文档复制到缓存——几 GB 的文件复制
+/// 既会长时间卡住，也会占满缓存目录。
 Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
   final fileStats = await saf.stat(uri);
   if (fileStats == null) {
@@ -1087,7 +1080,7 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
       fileSize: fileSize,
       fd: openedFd,
     );
-  } catch (e) {
+  } catch (_) {
     if (openedFd != null) {
       try {
         await saf.closeFileDescriptor(openedFd);
@@ -1095,45 +1088,18 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
     }
   }
 
-  final tempFile = await _copySafDocumentToCache(saf, uri);
+  final chunks = await saf.readFileStream(uri);
   return _SendSource(
-    file: tempFile,
     fileName: fileName,
     fileSize: fileSize,
-    tempCopyPath: tempFile.path,
+    chunks: chunks,
   );
-}
-
-Future<File> _copySafDocumentToCache(Saf saf, String uri) async {
-  final cacheDir = await getTemporaryDirectory();
-  final tempFile = File(
-    '${cacheDir.path}/flashbyte_send_${DateTime.now().microsecondsSinceEpoch}.tmp',
-  );
-  final sink = tempFile.openWrite();
-  try {
-    final stream = await saf.readFileStream(uri);
-    await for (final chunk in stream) {
-      sink.add(chunk);
-    }
-    await sink.flush();
-    await sink.close();
-  } catch (_) {
-    try {
-      await sink.close();
-    } on Exception catch (_) {}
-    try {
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
-    } on Exception catch (_) {}
-    rethrow;
-  }
-  return tempFile;
 }
 
 Future<void> _sendFileSequentially({
   required String fileId,
-  required File file,
+  required File? file,
+  required Stream<List<int>>? chunks,
   required int fileSize,
   required dynamic clientSocket,
   required bool Function() shouldCancel,
@@ -1146,7 +1112,21 @@ Future<void> _sendFileSequentially({
     return;
   }
 
-  final raf = await file.open();
+  final chunkStream = chunks;
+  if (chunkStream != null) {
+    await _sendChunksSequentially(
+      fileId: fileId,
+      chunks: chunkStream,
+      clientSocket: clientSocket,
+      shouldCancel: shouldCancel,
+      shouldPauseTransfer: shouldPauseTransfer,
+      shouldCancelTransfer: shouldCancelTransfer,
+      onPaused: onPaused,
+    );
+    return;
+  }
+
+  final raf = await file!.open();
   try {
     final buffer = Uint8List(chunkSize);
     var position = 0;
@@ -1191,6 +1171,55 @@ Future<void> _sendFileSequentially({
     }
   } finally {
     await raf.close();
+  }
+}
+
+/// 按块读取文档并逐块发送，用于不能直接读文件描述符的 content:// 文档。
+///
+/// 暂停时不再拉取下一块（`await for` 会暂停底层订阅，读取端随之减速），取消时
+/// 抛出 [core.TransferCancelled]，`await for` 会关闭底层读取流。
+Future<void> _sendChunksSequentially({
+  required String fileId,
+  required Stream<List<int>> chunks,
+  required dynamic clientSocket,
+  required bool Function() shouldCancel,
+  required bool Function(String fileId) shouldPauseTransfer,
+  required bool Function(String fileId) shouldCancelTransfer,
+  Future<void> Function(String fileId)? onPaused,
+}) async {
+  var lastPauseNoticeAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  await for (final rawChunk in chunks) {
+    if (rawChunk.isEmpty) {
+      continue;
+    }
+    while (!shouldCancel() &&
+        !shouldCancelTransfer(fileId) &&
+        shouldPauseTransfer(fileId)) {
+      final now = DateTime.now();
+      if (onPaused != null &&
+          now.difference(lastPauseNoticeAt) >=
+              const Duration(milliseconds: 500)) {
+        lastPauseNoticeAt = now;
+        await onPaused(fileId);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    if (shouldCancel() || shouldCancelTransfer(fileId)) {
+      throw const core.TransferCancelled();
+    }
+
+    final chunk = rawChunk is Uint8List
+        ? rawChunk
+        : Uint8List.fromList(rawChunk);
+    await core.sendSocketFrame(
+      clientSocket,
+      {
+        'type': 'file_chunk',
+        'fileId': fileId,
+      },
+      payloadBytes: chunk,
+    );
   }
 }
 
