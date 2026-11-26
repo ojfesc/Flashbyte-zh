@@ -97,6 +97,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<List<FastFilePickerPath>>? _sharedFilesSubscription;
   Timer? _networkRefreshTimer;
+  Timer? _networkGraceTimer;
   int _serverRestartGeneration = 0;
   bool _receiveServerIntentionallyStopped = false;
   _ServerNetworkMode? _serverNetworkMode;
@@ -161,6 +162,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     _connectivitySubscription?.cancel();
     _sharedFilesSubscription?.cancel();
     _networkRefreshTimer?.cancel();
+    _networkGraceTimer?.cancel();
     _deviceNameFocusNode.removeListener(_handleDeviceNameFocusChanged);
     _deviceNameFocusNode.dispose();
     _deviceNameController.dispose();
@@ -246,12 +248,27 @@ class _FileSelectionPageState extends State<FileSelectionPage>
       }
     });
     if (previousNetworkMode != null && previousNetworkMode != nextNetworkMode) {
-      // 网络模式变化会结束当前会话，日志用来核对传输中断的时间点。
+      // 网络模式变化不再立刻结束会话：先给 WiFi 漫游/重连一个宽限期，避免
+      // 两秒瞬断就把正在传输的会话停掉。真正的断链由 SocketService 的心跳和
+      // 会话页的重连逻辑处理。
       debugPrint('[NET] ${previousNetworkMode.name} -> ${nextNetworkMode.name}');
       if (nextNetworkMode == _ServerNetworkMode.offline) {
-        unawaited(_stopReceiveServerForNetworkLoss());
+        _networkGraceTimer?.cancel();
+        _networkGraceTimer = Timer(const Duration(seconds: 10), () {
+          if (!mounted) return;
+          if (_serverNetworkMode == _ServerNetworkMode.offline &&
+              !SocketService.instance.hasEstablishedConnection &&
+              !SocketService.instance.isClientMode) {
+            unawaited(_stopReceiveServerForNetworkLoss());
+          }
+        });
       } else if (_shouldReconnectServerFor(nextNetworkMode)) {
-        unawaited(_restartServer());
+        _networkGraceTimer?.cancel();
+        if (!SocketService.instance.hasEstablishedConnection &&
+            !SocketService.instance.isClientMode &&
+            !isReceiveStarting) {
+          unawaited(_restartServer());
+        }
       }
     }
   }
