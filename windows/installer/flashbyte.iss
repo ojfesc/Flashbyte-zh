@@ -54,3 +54,16 @@ Name: "{autodesktop}\{cm:AppDisplayName}"; Filename: "{app}\{#MyAppExeName}"; Ta
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// 安装向导和卸载窗口都置顶显示：安装/卸载期间即使点到别的窗口，进度也不会被挡住。
+// 两个事件分别在向导创建后、卸载进度窗口创建后调用，此时窗体对象已经存在。
+procedure InitializeWizard();
+begin
+  WizardForm.FormStyle := fsStayOnTop;
+end;
+
+procedure InitializeUninstallProgressForm();
+begin
+  UninstallProgressForm.FormStyle := fsStayOnTop;
+end;
