@@ -212,7 +212,7 @@ class _FrameWriter {
 
     // Keep the chain alive after a failure; the next caller still receives the
     // original error through [send].
-    _tail = next.then<void>((_) {}, onError: (_, __) {});
+    _tail = next.then<void>((_) {}, onError: (_, _) {});
     return next;
   }
 }
