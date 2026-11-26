@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
+import 'package:flashbyte/services/platform/android_document_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
@@ -28,6 +29,20 @@ class IncomingShareService {
     if (!_supported) {
       return;
     }
+
+    // Android 走系统意图直接拿 content:// URI：分享插件会把整个文件复制到缓存，
+    // 几 GB 的文件会长时间没反应，也会把缓存占满。
+    if (Platform.isAndroid) {
+      AndroidDocumentService.instance.sharedFilesStream.listen(
+        _publish,
+        onError: (Object _) {},
+      );
+      final initial = await AndroidDocumentService.instance
+          .takeInitialSharedFiles();
+      _publish(initial);
+      return;
+    }
+
     try {
       // Subscribe before reading the initial intent so warm shares are never
       // missed. The initial share is only delivered via getInitialMedia.
@@ -44,6 +59,13 @@ class IncomingShareService {
     }
   }
 
+  void _publish(List<FastFilePickerPath> files) {
+    if (files.isEmpty || _controller.isClosed) {
+      return;
+    }
+    _controller.add(files);
+  }
+
   Future<void> _emit(List<SharedMediaFile> files) async {
     final converted = <FastFilePickerPath>[];
     for (final file in files) {
@@ -52,9 +74,7 @@ class IncomingShareService {
         converted.add(path);
       }
     }
-    if (converted.isNotEmpty && !_controller.isClosed) {
-      _controller.add(converted);
-    }
+    _publish(converted);
   }
 
   Future<FastFilePickerPath?> _convert(SharedMediaFile file) async {
