@@ -313,10 +313,11 @@ class _TcpChatPageState extends State<TcpChatPage> {
             break;
 
           case 'error':
+            if (!mounted) return;
+            final l10n = AppLocalizations.of(context);
             final isFatal = message['fatal'] == 'true';
             final errorText =
-                message['message'] as String? ??
-                AppLocalizations.of(context).unknownError;
+                message['message'] as String? ?? l10n.unknownError;
             if (isFatal) {
               if (_pendingResumeAfterConnect) {
                 // A reconnect attempt failed; the periodic retry still owns
@@ -487,7 +488,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
                                                     CrossAxisAlignment.stretch,
                                                 spacing: 10,
                                                 children: [
-                                                  if (controls != null) controls,
+                                                  ?controls,
                                                   _buildTransferActions(
                                                     isConnectionLost:
                                                         disconnected,
