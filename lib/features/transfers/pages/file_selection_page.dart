@@ -15,6 +15,7 @@ import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
+import 'package:flashbyte/services/platform/android_document_service.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
 import 'package:flashbyte/models/user_facing_error.dart';
 import 'package:flashbyte/features/settings/settings_page.dart';
@@ -423,11 +424,15 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     });
 
     try {
-      final pickedFiles = await FastFilePicker.pickMultipleFiles();
+      // Android 用系统文档选择器拿 content:// URI，不再经过会复制整个文件的插件。
+      final pickedFiles = Platform.isAndroid
+          ? await AndroidDocumentService.instance.pickDocuments()
+          : await FastFilePicker.pickMultipleFiles() ??
+                const <FastFilePickerPath>[];
       if (!mounted) return;
 
       setState(() {
-        selectedFiles = pickedFiles ?? [];
+        selectedFiles = pickedFiles;
         _clipboardFilePaths.clear();
       });
     } finally {
