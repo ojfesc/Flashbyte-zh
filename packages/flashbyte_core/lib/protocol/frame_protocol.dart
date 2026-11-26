@@ -11,6 +11,44 @@ class FrameHeader {
   final int payloadLength;
 }
 
+/// Upper bounds for a single frame.
+///
+/// Metadata is a small JSON header while payloads carry file chunks of about
+/// one megabyte. A peer that announces more than this is treated as broken or
+/// hostile, so the receiver never buffers an unbounded amount of memory.
+class FrameLimits {
+  const FrameLimits._();
+
+  /// Largest JSON metadata block accepted for one frame.
+  ///
+  /// Batch requests carry one entry per file, so a folder with thousands of
+  /// files produces a large header; 4 MB covers tens of thousands of files while
+  /// still bounding what a hostile peer can make the receiver allocate.
+  static const int maxMetadataBytes = 4 * 1024 * 1024;
+
+  /// Largest binary payload accepted for one frame.
+  static const int maxPayloadBytes = 32 * 1024 * 1024;
+
+  /// Largest amount of unread data kept in [SocketReadBuffer].
+  static const int maxBufferedBytes = maxMetadataBytes + maxPayloadBytes + 8;
+}
+
+/// Raised when a frame header exceeds [FrameLimits].
+class InvalidFrameHeaderException implements Exception {
+  const InvalidFrameHeaderException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidFrameHeaderException: $message';
+}
+
+/// Whether [header] stays inside the protocol limits.
+bool isFrameHeaderValid(FrameHeader header) {
+  return header.headerLength <= FrameLimits.maxMetadataBytes &&
+      header.payloadLength <= FrameLimits.maxPayloadBytes;
+}
+
 /// Queue-based byte buffer for reading length-prefixed frames from a socket.
 class SocketReadBuffer {
   final Queue<Uint8List> _chunks = Queue<Uint8List>();
@@ -19,13 +57,19 @@ class SocketReadBuffer {
 
   int get availableBytes => _availableBytes;
 
-  void add(List<int> bytes) {
+  /// Adds raw bytes received from the socket.
+  ///
+  /// Returns false when the buffer grows past [FrameLimits.maxBufferedBytes],
+  /// which means the peer announced a frame larger than the protocol allows or
+  /// the consumer stopped draining. The caller must close the connection.
+  bool add(List<int> bytes) {
     if (bytes.isEmpty) {
-      return;
+      return true;
     }
 
     _chunks.add(bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
     _availableBytes += bytes.length;
+    return _availableBytes <= FrameLimits.maxBufferedBytes;
   }
 
   FrameHeader? tryPeekFrameHeader() {
