@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flashbyte/features/transfers/widgets/transfer_widget.dart';
+import 'package:flashbyte/l10n/app_localizations.dart';
 
 void main() {
   group('TransferWidget', () {
@@ -9,6 +10,8 @@ void main() {
     ) async {
       await tester.pumpWidget(
         const MaterialApp(
+          localizationsDelegates: [AppLocalizations.delegate],
+          supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
             body: TransferWidget(
               fileName: 'sample.pdf',
@@ -21,6 +24,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
 
       expect(find.text('sample.pdf'), findsOneWidget);
       expect(find.textContaining('4.2 MB'), findsOneWidget);
@@ -34,6 +38,8 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
+            localizationsDelegates: const [AppLocalizations.delegate],
+            supportedLocales: AppLocalizations.supportedLocales,
             home: Scaffold(
               body: TransferWidget(
                 fileName: 'video.mp4',
@@ -65,6 +71,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: const [AppLocalizations.delegate],
+          supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
             body: TransferWidget(
               fileName: 'doc.docx',
