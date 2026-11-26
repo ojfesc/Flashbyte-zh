@@ -379,6 +379,8 @@ class AppLocalizations {
   String get cancelAll => isZh ? '全部取消' : 'Cancel all';
   String get continueAction => isZh ? '继续' : 'Continue';
   String get accept => isZh ? '接受' : 'Accept';
+  String get acceptAll => isZh ? '全部接收' : 'Accept all';
+  String get declineAll => isZh ? '全部拒绝' : 'Decline all';
   String get waitingForReceiverToAccept =>
       isZh ? '等待接收方接受' : 'Waiting for receiver to accept';
   String fileStatusLine({
