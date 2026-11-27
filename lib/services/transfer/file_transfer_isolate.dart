@@ -23,6 +23,16 @@ import 'package:uuid/uuid.dart';
 final _sendingFileSizes = <String, int>{};
 final _resumeOffsets = <String, int>{};
 
+/// 读取源提前结束或大小不一致：重试同一个文件也不会变好，按永久失败处理。
+class _SourceReadException implements Exception {
+  const _SourceReadException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// 与 Android 原生查询 URI 元数据的通道；分享来源可能不是 DocumentsProvider。
 const MethodChannel _documentsChannel = MethodChannel('flashbyte/documents');
 
@@ -778,7 +788,9 @@ Future<String?> _sendFileCommand(
     if (Platform.isAndroid && filePath.startsWith('content://')) {
       source = await _openAndroidSendSource(Saf(), filePath);
       if (source == null) {
-        throw Exception('Could not read selected file metadata.');
+        throw const _SourceReadException(
+          'Could not read selected file metadata.',
+        );
       }
       fileToSend = source.file;
       chunksToSend = source.chunks;
@@ -892,6 +904,37 @@ Future<String?> _sendFileCommand(
     stopwatch.stop();
 
     await source?.dispose();
+    return fileId;
+  } on _SourceReadException catch (e) {
+    // 本地读取失败（大小不一致/提前结束），重试没有意义：通知接收端丢弃半截
+    // 文件，界面按失败处理，并且不关闭连接。
+    stopwatch.stop();
+    await source?.dispose();
+    final fileId = fileHeader?['uuid'] as String?;
+    if (fileId != null) {
+      try {
+        await core.sendSocketFrame(clientSocket, {
+          'type': 'file_end',
+          'fileId': fileId,
+          'cancelled': true,
+        });
+        await clientSocket.flush();
+      } catch (_) {
+        // 连接已不可用时无需再通知接收端。
+      }
+      toUiSendPort.send({
+        'status': 'transfer_failed',
+        'fileId': fileId,
+        'message': e.toString(),
+      });
+    } else {
+      // 还没生成文件头（例如元数据读取失败）时没有卡片可标记，只提示原因。
+      toUiSendPort.send({
+        'status': 'error',
+        'fatal': 'false',
+        'message': e.toString(),
+      });
+    }
     return fileId;
   } catch (e) {
     stopwatch.stop();
@@ -1114,6 +1157,32 @@ Future<String?> _sendBatchCommand(
             'fileId': fileId,
           });
         }
+      } on _SourceReadException catch (e) {
+        // 单个文件读取失败不影响整批：通知接收端丢弃这个文件的半截数据，
+        // 界面标记失败后继续下一个，不触发自动重试。
+        try {
+          await core.sendSocketFrame(clientSocket, {
+            'type': 'file_end',
+            'fileId': fileId,
+            'cancelled': true,
+          });
+          await clientSocket.flush();
+        } catch (_) {
+          // 连接已不可用时无需再通知接收端。
+        }
+        toUiSendPort.send({
+          'status': 'transfer_failed',
+          'fileId': fileId,
+          'message': e.toString(),
+        });
+        if (isLast) {
+          toUiSendPort.send({
+            'status': 'transfer_cancel_ready',
+            'fileId': fileId,
+          });
+        }
+        await entry.source.dispose();
+        continue;
       }
 
       if (!fileCancelled) {
@@ -1190,28 +1259,34 @@ class _SendSource {
 Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
   String? fileName;
   int? fileSize;
-  try {
-    final fileStats = await saf.stat(uri);
-    if (fileStats != null) {
-      fileName = fileStats.name;
-      fileSize = fileStats.length;
+
+  // 先问原生：它优先用文件描述符的真实大小，provider 的 SIZE 可能不可信。
+  final nativeStats = await _statContentUri(uri);
+  if (nativeStats != null) {
+    fileName = nativeStats.name;
+    fileSize = nativeStats.size;
+  }
+
+  // 原生查不到时再回退到 SAF 的元数据。
+  if (fileName == null || fileSize == null) {
+    try {
+      final fileStats = await saf.stat(uri);
+      if (fileStats != null) {
+        fileName = fileStats.name;
+        fileSize = fileStats.length;
+      }
+    } catch (_) {
+      // 非 DocumentsProvider 的 URI 由上面的原生查询处理。
     }
-  } catch (_) {
-    // 非 DocumentsProvider 的 URI 由下面的兜底处理。
   }
 
   if (fileName == null || fileSize == null) {
-    final fallback = await _statContentUri(uri);
-    if (fallback == null) {
-      return null;
-    }
-    fileName = fallback.name;
-    fileSize = fallback.size;
+    return null;
   }
 
   // 两条路径都保证已赋非空值；这里去掉可空类型，方便后续直接使用。
   final resolvedName = fileName;
-  final resolvedSize = fileSize;
+  var resolvedSize = fileSize;
 
   int? openedFd;
   try {
@@ -1220,6 +1295,12 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
     final pseudoFile = File(fdResult.path);
     final probe = await pseudoFile.open();
     await probe.close();
+    // provider 报的大小可能不可信（例如把 APK 报成 1.63 TB），
+    // 以文件描述符指向的真实文件长度为准。
+    final fdLength = await pseudoFile.length();
+    if (fdLength > 0) {
+      resolvedSize = fdLength;
+    }
     return _SendSource(
       file: pseudoFile,
       fileName: resolvedName,
@@ -1328,7 +1409,10 @@ Future<void> _sendFileSequentially({
       final bytesToRead = min(chunkSize, fileSize - position);
       final bytesRead = await raf.readInto(buffer, 0, bytesToRead);
       if (bytesRead <= 0) {
-        break;
+        // 文件比声明的大小短：继续等待只会卡住，直接按永久失败处理。
+        throw _SourceReadException(
+          'File ended at $position of $fileSize bytes.',
+        );
       }
       final actualChunk = Uint8List.sublistView(buffer, 0, bytesRead);
 
@@ -1427,6 +1511,12 @@ Future<void> _sendChunksSequentially({
       }
     }
     await flushPending();
+    if (sentBytes < fileSize) {
+      // 文档流提前结束：按永久失败处理，不让界面自动重试。
+      throw _SourceReadException(
+        'File ended at $sentBytes of $fileSize bytes.',
+      );
+    }
   } finally {
     // 取消时丢掉还没发出的数据，不把半截缓冲写出去。
     pending.clear();
