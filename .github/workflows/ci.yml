@@ -1,9 +1,8 @@
 name: CI
 
+# 只在 Actions 页面手动触发：推送到 main 或提交 PR 时不再自动运行。
+# 需要检查某次改动时，在 Actions → CI → Run workflow 选择分支执行。
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
