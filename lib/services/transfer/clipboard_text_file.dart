@@ -8,18 +8,19 @@ import 'package:path_provider/path_provider.dart';
 /// 发送端把它当作普通文件传输，接收端识别 `clipboard` 标记后只在内存里拼接
 /// 内容，完成时写回粘贴板，不生成磁盘文件。系统分享进来的文本/链接也走这里。
 Future<File?> createClipboardTextFile() async {
+  String? text;
   try {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text == null || text.isEmpty) {
-      return null;
-    }
-
-    return createTextFileFromString(text);
+    text = data?.text;
   } catch (_) {
-    // 无法读取粘贴板或写临时文件时按“没有内容”处理，由界面提示。
+    // 无法读取粘贴板时按“没有内容”处理，由界面提示。
     return null;
   }
+
+  if (text == null || text.isEmpty) {
+    return null;
+  }
+  return createTextFileFromString(text);
 }
 
 /// 把一段文本写成临时文件，供粘贴板与“分享文本/链接”共用同一套发送路径。
