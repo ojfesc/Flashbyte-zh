@@ -255,9 +255,14 @@ class AppLocalizations {
   String get dropFilesOnly => isZh
       ? '在此处放置文件。暂不支持文件夹。'
       : 'Drop files here. Folders are not supported yet.';
-  String sharedFilesAdded(int count) => count == 1
-      ? (isZh ? '已添加 1 个共享文件' : '1 shared file added')
-      : (isZh ? '已添加 $count 个共享文件' : '$count shared files added');
+  String sharedFilesReplaced(int count) => count == 1
+      ? (isZh ? '已替换为 1 个分享文件' : 'Replaced with 1 shared file')
+      : (isZh
+            ? '已替换为 $count 个分享文件'
+            : 'Replaced with $count shared files');
+  String get sharedFilesEphemeral => isZh
+      ? '部分分享文件只在本次运行内可读，请尽快发送。'
+      : 'Some shared files are only readable during this run; send them soon.';
 
   // 接收请求页
   String get incomingFiles => isZh ? '接收文件' : 'Incoming files';
