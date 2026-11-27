@@ -87,51 +87,15 @@ class _TcpChatPageState extends State<TcpChatPage> {
     _peerInfo = SocketService.instance.connectedPeerInfo;
 
     _sharedFilesSubscription = IncomingShareService.instance.sharedFilesStream
-        .listen((batch) {
-          if (!mounted || batch.isEmpty) {
-            return;
-          }
-          if (isDisconnected.value) {
-            showScaffoldSnackbar(
-              AppLocalizations.of(context).couldNotSendSharedFiles,
-            );
-            return;
-          }
-          final locations = <String>[];
-          for (final file in batch.files) {
-            final location = _pickedFileLocation(file);
-            if (location != null) locations.add(location);
-          }
-          if (locations.isEmpty) {
-            showScaffoldSnackbar(
-              AppLocalizations.of(context).couldNotReadSelectedFile,
-            );
-            return;
-          }
-          final l10n = AppLocalizations.of(context);
-          final clipboardLocations = locations
-              .where(batch.clipboardPaths.contains)
-              .toSet();
-          if (clipboardLocations.isEmpty) {
-            _sendLocations(locations);
-          } else {
-            // 分享的文本/链接按粘贴板发送，与应用内粘贴板按钮一致。
-            for (final location in locations) {
-              final isClipboard = clipboardLocations.contains(location);
-              SocketService.instance.sendFile(
-                location,
-                clipboard: isClipboard,
-                displayName: isClipboard ? l10n.clipboardFileName : null,
-              );
-            }
-          }
-          final peerName = _peerName(context);
-          showScaffoldSnackbar(
-            batch.files.length == 1
-                ? l10n.sendingSharedFileTo(peerName)
-                : l10n.sendingNSharedFilesTo(batch.files.length, peerName),
-          );
-        });
+        .listen(_handleSharedBatch);
+    IncomingShareService.instance.sessionActive = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final deferred = IncomingShareService.instance.takeDeferredForSession();
+      if (deferred != null) {
+        _handleSharedBatch(deferred);
+      }
+    });
 
     if (widget.initialBatchFiles != null &&
         widget.initialBatchFiles!.isNotEmpty) {
@@ -372,6 +336,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
 
   @override
   void dispose() {
+    IncomingShareService.instance.sessionActive = false;
     _resumeTimer?.cancel();
     _resumeTimer = null;
     _streamSubscription?.cancel();
@@ -1042,6 +1007,53 @@ class _TcpChatPageState extends State<TcpChatPage> {
         showCloseIcon: true,
         dismissDirection: DismissDirection.horizontal,
       ),
+    );
+  }
+
+  /// 会话页打开期间收到的分享：直接发给当前设备。
+  void _handleSharedBatch(SharedFiles batch) {
+    if (!mounted || batch.isEmpty) {
+      return;
+    }
+    if (isDisconnected.value) {
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).couldNotSendSharedFiles,
+      );
+      return;
+    }
+    final locations = <String>[];
+    for (final file in batch.files) {
+      final location = _pickedFileLocation(file);
+      if (location != null) locations.add(location);
+    }
+    if (locations.isEmpty) {
+      showScaffoldSnackbar(
+        AppLocalizations.of(context).couldNotReadSelectedFile,
+      );
+      return;
+    }
+    final l10n = AppLocalizations.of(context);
+    final clipboardLocations = locations
+        .where(batch.clipboardPaths.contains)
+        .toSet();
+    if (clipboardLocations.isEmpty) {
+      _sendLocations(locations);
+    } else {
+      // 分享的文本/链接按粘贴板发送，与应用内粘贴板按钮一致。
+      for (final location in locations) {
+        final isClipboard = clipboardLocations.contains(location);
+        SocketService.instance.sendFile(
+          location,
+          clipboard: isClipboard,
+          displayName: isClipboard ? l10n.clipboardFileName : null,
+        );
+      }
+    }
+    final peerName = _peerName(context);
+    showScaffoldSnackbar(
+      batch.files.length == 1
+          ? l10n.sendingSharedFileTo(peerName)
+          : l10n.sendingNSharedFilesTo(batch.files.length, peerName),
     );
   }
 
