@@ -246,7 +246,11 @@ class _StartPageState extends State<StartPage> {
       if (!mounted || batch.isEmpty || _sharingOpen) {
         return;
       }
-      _openSharing(0, initialFiles: batch);
+      _openSharing(
+        0,
+        initialFiles: batch.files,
+        initialClipboardPaths: batch.clipboardPaths,
+      );
     });
   }
 
@@ -620,6 +624,7 @@ class _StartPageState extends State<StartPage> {
   void _openSharing(
     int initialTabIndex, {
     List<FastFilePickerPath> initialFiles = const [],
+    Set<String> initialClipboardPaths = const {},
   }) {
     if (_sharingOpen) {
       return;
@@ -631,6 +636,7 @@ class _StartPageState extends State<StartPage> {
         builder: (context) => FileSelectionPage(
           initialTabIndex: initialTabIndex,
           initialFiles: initialFiles,
+          initialClipboardPaths: initialClipboardPaths,
         ),
       ),
     ).whenComplete(() {
