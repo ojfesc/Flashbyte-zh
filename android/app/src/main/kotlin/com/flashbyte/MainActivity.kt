@@ -62,6 +62,10 @@ class MainActivity : FlutterActivity() {
                 "takeInitialSharedFiles" -> result.success(
                     takeInitialSharedFiles()
                 )
+                "statUri" -> {
+                    val uri = call.argument<String>("uri")
+                    result.success(uri?.let { statContentUri(it) })
+                }
                 else -> result.notImplemented()
             }
         }
@@ -296,6 +300,41 @@ class MainActivity : FlutterActivity() {
             }
         }
         return persisted
+    }
+
+    /**
+     * 分享来源不一定是 DocumentsProvider，SAF 的 stat 会失败；这里只依赖
+     * OpenableColumns 取名字和大小，拿不到时再尝试打开资产文件描述符。
+     */
+    private fun statContentUri(uriString: String): Map<String, Any?>? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val entry = describeUris(listOf(uri)).firstOrNull() ?: return null
+            var size = entry["size"] as? Long
+            if (size == null || size < 0) {
+                size = try {
+                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (size == null || size < 0) {
+                size = try {
+                    contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (size == null || size < 0) {
+                return null
+            }
+            mapOf(
+                "name" to (entry["name"] as? String ?: uri.lastPathSegment ?: "file"),
+                "size" to size
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 只查询显示名和大小，不读取文件内容。 */
