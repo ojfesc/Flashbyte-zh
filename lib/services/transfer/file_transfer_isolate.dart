@@ -1209,11 +1209,9 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
     fileSize = fallback.size;
   }
 
+  // 两条路径都保证已赋非空值；这里去掉可空类型，方便后续直接使用。
   final resolvedName = fileName;
   final resolvedSize = fileSize;
-  if (resolvedName == null || resolvedSize == null) {
-    return null;
-  }
 
   int? openedFd;
   try {
