@@ -6,6 +6,7 @@ import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/models/discovered_device.dart';
+import 'package:flashbyte/models/shared_files.dart';
 import 'package:flashbyte/platform/window_state_manager.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
 import 'package:flashbyte/services/platform/android_connection_notification_service.dart';
@@ -231,7 +232,7 @@ class _StartPageState extends State<StartPage> {
   List<DiscoveredDevice> _devices = [];
   final _starRotationTarget = ValueNotifier<double>(0);
   StreamSubscription<List<DiscoveredDevice>>? _discoverySub;
-  StreamSubscription<List<FastFilePickerPath>>? _shareSub;
+  StreamSubscription<SharedFiles>? _shareSub;
   bool _sharingOpen = false;
   int _previousDeviceCount = 0;
   final _seenDeviceIds = <String>{};
