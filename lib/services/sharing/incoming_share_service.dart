@@ -2,26 +2,53 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
+import 'package:flashbyte/models/shared_files.dart';
 import 'package:flashbyte/services/platform/android_document_service.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
-/// Receives files and text shared to Flashbyte from other apps (share menu)
-/// and exposes them as batches of ready-to-send [FastFilePickerPath]s.
-class IncomingShareService {
+/// 接收其它应用通过系统分享交给 Flashbyte 的内容。
+///
+/// Android 由原生意图直接回传 content:// URI；iOS 由分享扩展写入 App Group，
+/// 主应用再通过通道取走。每次事件只描述“这一次分享”，由界面替换当前选择。
+class IncomingShareService with WidgetsBindingObserver {
   IncomingShareService._();
 
   static final IncomingShareService instance = IncomingShareService._();
 
-  final _controller = StreamController<List<FastFilePickerPath>>.broadcast();
+  static const MethodChannel _iosChannel = MethodChannel(
+    'flashbyte/ios_sharing',
+  );
+
+  final _controller = StreamController<SharedFiles>.broadcast();
   bool _initialized = false;
+  bool _isDrainingIos = false;
 
-  /// Emits one event per share action with only the files from that action.
-  Stream<List<FastFilePickerPath>> get sharedFilesStream => _controller.stream;
+  /// 每次分享发出一条事件，里面只包含这一次分享的内容。
+  Stream<SharedFiles> get sharedFilesStream => _controller.stream;
 
-  // iOS 需要额外的 Share Extension 目标才能收到系统分享；当前工程没有该目标，
-  // 所以只在 Android 上声明支持，避免 iOS 上出现“什么都不发生”的入口。
-  bool get _supported => Platform.isAndroid;
+  /// 会话页是否已经挂载并接管分享；用于页面切换瞬间的交接。
+  bool sessionActive = false;
+
+  SharedFiles? _deferredForSession;
+
+  /// 会话页正在打开、还没订阅流时，文件选择页先把这一次分享暂存起来。
+  void deferForSession(SharedFiles batch) {
+    _deferredForSession = batch;
+  }
+
+  SharedFiles? takeDeferredForSession() {
+    final batch = _deferredForSession;
+    _deferredForSession = null;
+    return batch;
+  }
+
+  void clearDeferredForSession() {
+    _deferredForSession = null;
+  }
+
+  bool get _supported => Platform.isAndroid || Platform.isIOS;
 
   Future<void> init() async {
     if (_initialized) {
@@ -33,83 +60,85 @@ class IncomingShareService {
     }
 
     // Android 走系统意图直接拿 content:// URI：分享插件会把整个文件复制到缓存，
-    // 几 GB 的文件会长时间没反应，也会把缓存占满。
+    // 几 GB 的文件会长时间没有反应，也会把缓存占满。
     if (Platform.isAndroid) {
       AndroidDocumentService.instance.sharedFilesStream.listen(
         _publish,
         onError: (Object _) {},
       );
-      final initial = await AndroidDocumentService.instance
-          .takeInitialSharedFiles();
-      _publish(initial);
+      try {
+        _publish(await AndroidDocumentService.instance.takeInitialSharedFiles());
+      } on PlatformException {
+        // 原生通道不可用时按“没有分享内容”处理。
+      }
       return;
     }
 
+    // iOS：分享扩展把文件写进 App Group 的共享目录；主应用每次回到前台时取一次。
+    // 扩展唤起主应用同样会触发 resumed，因此不需要额外的原生回调。
+    WidgetsBinding.instance.addObserver(this);
+    await _drainIosShares();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_drainIosShares());
+    }
+  }
+
+  Future<void> _drainIosShares() async {
+    if (_isDrainingIos) {
+      return;
+    }
+    _isDrainingIos = true;
     try {
-      // Subscribe before reading the initial intent so warm shares are never
-      // missed. The initial share is only delivered via getInitialMedia.
-      ReceiveSharingIntent.instance.getMediaStream().listen(
-        (files) => unawaited(_emit(files)),
-        onError: (Object _) {},
+      final raw = await _iosChannel.invokeMethod<List<dynamic>>(
+        'takePendingFiles',
       );
-      final initial = await ReceiveSharingIntent.instance.getInitialMedia();
-      await _emit(initial);
-      // Consume the initial intent so it is not delivered again.
-      await ReceiveSharingIntent.instance.reset();
-    } catch (_) {
-      // Plugin unavailable; sharing stays disabled on this platform.
+      _publish(_toIosShared(raw));
+    } on MissingPluginException {
+      // 旧安装包没有实现该通道，忽略即可。
+    } on PlatformException {
+      // 读取共享目录失败：回到前台时会再试一次。
+    } finally {
+      _isDrainingIos = false;
     }
   }
 
-  void _publish(List<FastFilePickerPath> files) {
-    if (files.isEmpty || _controller.isClosed) {
+  SharedFiles _toIosShared(dynamic raw) {
+    if (raw is! List) {
+      return SharedFiles.empty;
+    }
+    final files = <FastFilePickerPath>[];
+    final clipboardPaths = <String>{};
+    for (final item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final path = item['path'];
+      if (path is! String || path.isEmpty) {
+        continue;
+      }
+      final rawName = item['name'];
+      final isClipboard = item['clipboard'] == true;
+      final name = isClipboard
+          ? clipboardTextDisplayName()
+          : rawName is String && rawName.isNotEmpty
+          ? rawName
+          : path.split('/').last;
+      files.add(FastFilePickerPath.fromPath(name, path));
+      if (isClipboard) {
+        clipboardPaths.add(path);
+      }
+    }
+    return SharedFiles(files: files, clipboardPaths: clipboardPaths);
+  }
+
+  void _publish(SharedFiles batch) {
+    if (batch.isEmpty || _controller.isClosed) {
       return;
     }
-    _controller.add(files);
-  }
-
-  Future<void> _emit(List<SharedMediaFile> files) async {
-    final converted = <FastFilePickerPath>[];
-    for (final file in files) {
-      final path = await _convert(file);
-      if (path != null) {
-        converted.add(path);
-      }
-    }
-    _publish(converted);
-  }
-
-  Future<FastFilePickerPath?> _convert(SharedMediaFile file) async {
-    try {
-      switch (file.type) {
-        case SharedMediaType.text:
-        case SharedMediaType.url:
-          return await _textToFile(file.path);
-        case SharedMediaType.image:
-        case SharedMediaType.video:
-        case SharedMediaType.file:
-          final path = file.path;
-          if (path.isEmpty) return null;
-          final io = File(path);
-          if (!await io.exists()) return null;
-          // Probe readability: some shared content URIs resolve to paths
-          // that are inaccessible due to scoped storage.
-          final handle = await io.open();
-          await handle.close();
-          final name = path.split('/').last;
-          if (name.isEmpty) return null;
-          return FastFilePickerPath.fromPath(name, path);
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<FastFilePickerPath> _textToFile(String text) async {
-    final dir = await getTemporaryDirectory();
-    final name = 'Shared text ${DateTime.now().millisecondsSinceEpoch}.txt';
-    final file = File('${dir.path}/$name');
-    await file.writeAsString(text);
-    return FastFilePickerPath.fromPath(name, file.path);
+    _controller.add(batch);
   }
 }

@@ -62,6 +62,10 @@ class MainActivity : FlutterActivity() {
                 "takeInitialSharedFiles" -> result.success(
                     takeInitialSharedFiles()
                 )
+                "statUri" -> {
+                    val uri = call.argument<String>("uri")
+                    result.success(uri?.let { statContentUri(it) })
+                }
                 else -> result.notImplemented()
             }
         }
@@ -226,29 +230,115 @@ class MainActivity : FlutterActivity() {
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
             return emptyList()
         }
-        val uris = mutableListOf<Uri>()
+
+        val uris = linkedSetOf<Uri>()
         if (action == Intent.ACTION_SEND) {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
         } else {
             @Suppress("DEPRECATION")
-            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let {
+                uris.addAll(it)
+            }
+        }
+        // 有些应用只把 URI 放进 ClipData，不写 EXTRA_STREAM。
+        intent.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index)?.uri?.let { uris.add(it) }
+            }
         }
         intent.removeExtra(Intent.EXTRA_STREAM)
-        persistReadPermission(uris)
-        return describeUris(uris)
+
+        if (uris.isEmpty()) {
+            // 纯文本/链接分享：交给 Dart 侧按粘贴板内容处理。
+            var text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            if (text.isNullOrEmpty()) {
+                // 有些应用只把文本放进 ClipData。
+                val clip = intent.clipData
+                if (clip != null) {
+                    for (index in 0 until clip.itemCount) {
+                        val value = clip.getItemAt(index)?.text?.toString()
+                        if (!value.isNullOrEmpty()) {
+                            text = value
+                            break
+                        }
+                    }
+                }
+            }
+            if (!text.isNullOrEmpty()) {
+                return listOf(
+                    mapOf(
+                        "text" to text,
+                        "clipboard" to true
+                    )
+                )
+            }
+            return emptyList()
+        }
+
+        val persisted = persistReadPermission(uris)
+        return describeUris(uris.toList()).map { entry ->
+            val map = entry.toMutableMap()
+            val uri = entry["uri"] as? String
+            map["persistable"] = uri != null && persisted.contains(uri)
+            map
+        }
     }
 
-    private fun persistReadPermission(uris: List<Uri>) {
+    /** 尝试把读权限持久化；返回成功的 URI，未成功的只在本次运行内可读。 */
+    private fun persistReadPermission(uris: Collection<Uri>): Set<String> {
+        val persisted = mutableSetOf<String>()
         for (uri in uris) {
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+                persisted.add(uri.toString())
             } catch (_: Exception) {
-                // 分享方没给可持久化权限时忽略：本次启动期间仍可读
+                // 分享方没给可持久化权限时忽略。
             }
+        }
+        return persisted
+    }
+
+    /**
+     * 分享来源不一定是 DocumentsProvider，SAF 的 stat 会失败；这里只依赖
+     * OpenableColumns 取名字和大小，拿不到时再尝试打开资产文件描述符。
+     */
+    private fun statContentUri(uriString: String): Map<String, Any?>? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val entry = describeUris(listOf(uri)).firstOrNull() ?: return null
+
+            // 优先用文件描述符的真实大小；content provider 的 SIZE 可能不可信。
+            var size: Long? = try {
+                contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+            } catch (_: Exception) {
+                null
+            }
+            if (size == null || size <= 0) {
+                val providerSize = entry["size"] as? Long
+                if (providerSize != null && providerSize >= 0) {
+                    size = providerSize
+                }
+            }
+            if (size == null || size <= 0) {
+                size = try {
+                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (size == null || size < 0) {
+                return null
+            }
+            mapOf(
+                "name" to (entry["name"] as? String ?: uri.lastPathSegment ?: "file"),
+                "size" to size
+            )
+        } catch (_: Exception) {
+            null
         }
     }
 
