@@ -310,17 +310,22 @@ class MainActivity : FlutterActivity() {
         return try {
             val uri = Uri.parse(uriString)
             val entry = describeUris(listOf(uri)).firstOrNull() ?: return null
-            var size = entry["size"] as? Long
-            if (size == null || size < 0) {
-                size = try {
-                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
-                } catch (_: Exception) {
-                    null
+
+            // 优先用文件描述符的真实大小；content provider 的 SIZE 可能不可信。
+            var size: Long? = try {
+                contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+            } catch (_: Exception) {
+                null
+            }
+            if (size == null || size <= 0) {
+                val providerSize = entry["size"] as? Long
+                if (providerSize != null && providerSize >= 0) {
+                    size = providerSize
                 }
             }
-            if (size == null || size < 0) {
+            if (size == null || size <= 0) {
                 size = try {
-                    contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
                 } catch (_: Exception) {
                     null
                 }
