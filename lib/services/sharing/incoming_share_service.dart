@@ -19,7 +19,9 @@ class IncomingShareService {
   /// Emits one event per share action with only the files from that action.
   Stream<List<FastFilePickerPath>> get sharedFilesStream => _controller.stream;
 
-  bool get _supported => Platform.isAndroid || Platform.isIOS;
+  // iOS 需要额外的 Share Extension 目标才能收到系统分享；当前工程没有该目标，
+  // 所以只在 Android 上声明支持，避免 iOS 上出现“什么都不发生”的入口。
+  bool get _supported => Platform.isAndroid;
 
   Future<void> init() async {
     if (_initialized) {

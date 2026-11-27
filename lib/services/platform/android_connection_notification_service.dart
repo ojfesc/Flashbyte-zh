@@ -5,6 +5,7 @@ import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/app/controllers/app_locale_controller.dart';
+import 'package:flashbyte/services/platform/transfer_foreground_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flutter/foundation.dart';
 
@@ -326,6 +327,7 @@ class AndroidConnectionNotificationService {
     _progressFocusFileId = null;
     _progressNotificationTimer?.cancel();
     _progressNotificationTimer = null;
+    unawaited(TransferForegroundService.stop());
     unawaited(AwesomeNotifications().cancel(_progressNotificationId));
     unawaited(AwesomeNotifications().cancel(_offerNotificationId));
     unawaited(AwesomeNotifications().cancel(_foregroundServiceId));
@@ -486,6 +488,8 @@ class AndroidConnectionNotificationService {
 
     if (_pendingOffers.contains(fileId)) return;
 
+    // 有文件真正开始传输时才占用前台服务，传输结束或断开后释放。
+    unawaited(TransferForegroundService.start());
     _progressFocusFileId = fileId;
     unawaited(_showConnectionNotification());
     _scheduleProgressNotificationUpdate(force: true);
@@ -545,6 +549,7 @@ class AndroidConnectionNotificationService {
       _activeBatchIds.clear();
       _progressNotificationTimer?.cancel();
       _progressNotificationTimer = null;
+      unawaited(TransferForegroundService.stop());
       unawaited(AwesomeNotifications().cancel(_progressNotificationId));
       unawaited(_showConnectionNotification());
       // 本次请求结束，清掉批量标记，下一请求重新记录。

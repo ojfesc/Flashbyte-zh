@@ -43,6 +43,11 @@ class SocketService {
   bool get isHosting => _hostIsListening;
   bool get isSecureHosting => _hostIsListening && _hostUsesTls;
   bool get hasEstablishedConnection => _hasEstablishedConnection;
+  /// Whether the current isolate is a client session (this device is sending).
+  ///
+  /// The file-selection page uses this to avoid starting a receive host while
+  /// a sender session is being reconnected.
+  bool get isClientMode => _isClientMode;
   IsolateMessage? get connectedPeerInfo => _connectedPeerInfo == null
       ? null
       : Map<String, dynamic>.from(_connectedPeerInfo!);
@@ -50,6 +55,7 @@ class SocketService {
   bool _hasEstablishedConnection = false;
   bool _hostIsListening = false;
   bool _hostUsesTls = false;
+  bool _isClientMode = false;
 
   Future<void> startHost(
     String host, {
@@ -116,8 +122,17 @@ class SocketService {
     String? expectedCertificateFingerprint,
     String? trustedPeerId,
   }) async {
-    await _stopConnectionGracefully();
+    if (mode == 'client') {
+      // A reconnect must not send the graceful "transfer_cancelled"
+      // disconnect: the receiver would discard the partial file that this
+      // reconnect is about to resume. Closing the socket is enough; the
+      // receiver's onDone path keeps the partial.
+      stopConnection();
+    } else {
+      await _stopConnectionGracefully();
+    }
     final generation = _connectionGeneration;
+    _isClientMode = mode == 'client';
     _hostUsesTls = mode == 'host' && useTLS;
     _disconnectRequested = false;
     _transferStartMessages.clear();
@@ -279,8 +294,16 @@ class SocketService {
     _toIsolateSendPort!.send({
       'command': 'send_file',
       'filePath': filePath,
-      if (displayName != null) 'displayName': displayName,
+      'displayName': ?displayName,
       'clipboard': clipboard,
+    });
+  }
+
+  /// 通知已连接的对端本机改名，避免对方等到重连才看到新名称。
+  void updateDeviceName(String deviceName) {
+    _toIsolateSendPort?.send({
+      'command': 'update_peer_info',
+      'deviceName': deviceName,
     });
   }
 
@@ -400,8 +423,15 @@ class SocketService {
       });
     } catch (_) {
       stopConnection();
+      return Future.value();
     }
-    return completer.future;
+    // 隔离进程可能已经不再回执（例如 socket 已死）；超时后强制拆除，调用方不会挂起。
+    return completer.future.timeout(
+      const Duration(seconds: 4),
+      onTimeout: () {
+        stopConnection();
+      },
+    );
   }
 
   Future<void> stopConnectionGracefully({
@@ -442,6 +472,7 @@ class SocketService {
     _uiReceivePort = null;
     _hostIsListening = false;
     _hostUsesTls = false;
+    _isClientMode = false;
     _disconnectRequested = false;
   }
 

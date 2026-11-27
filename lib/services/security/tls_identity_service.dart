@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:basic_utils/basic_utils.dart';
@@ -27,7 +28,26 @@ class TlsIdentityService {
   static const _certificateFileName = 'device.crt';
   static const _privateKeyFileName = 'device.key';
 
-  static Future<TlsIdentity> getOrCreateIdentity() async {
+  /// In-flight load/generation shared by concurrent callers so the key pair is
+  /// only created once.
+  static Future<TlsIdentity>? _pendingIdentity;
+
+  static Future<TlsIdentity> getOrCreateIdentity() {
+    final pending = _pendingIdentity;
+    if (pending != null) {
+      return pending;
+    }
+    final future = _loadOrCreateIdentity();
+    _pendingIdentity = future;
+    future.whenComplete(() {
+      if (identical(_pendingIdentity, future)) {
+        _pendingIdentity = null;
+      }
+    }).ignore();
+    return future;
+  }
+
+  static Future<TlsIdentity> _loadOrCreateIdentity() async {
     final directory = await _identityDirectory();
     final certFile = File('${directory.path}/$_certificateFileName');
     final keyFile = File('${directory.path}/$_privateKeyFileName');
@@ -89,38 +109,43 @@ class TlsIdentityService {
     required File certFile,
     required File keyFile,
   }) async {
-    final keyPair = CryptoUtils.generateRSAKeyPair();
-    final privateKey = keyPair.privateKey as RSAPrivateKey;
-    final publicKey = keyPair.publicKey as RSAPublicKey;
-    final csr = X509Utils.generateRsaCsrPem(
-      {
-        'CN': certificateCommonName,
-        'O': 'Flashbyte',
-        'OU': '',
-        'L': '',
-        'S': '',
-        'C': '',
-      },
-      privateKey,
-      publicKey,
-    );
-    final certificatePem = X509Utils.generateSelfSignedCertificate(
-      privateKey,
-      csr,
-      365 * 10,
-    );
-    final privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPemPkcs1(
-      privateKey,
-    );
+    // RSA 密钥生成是纯 CPU 计算：放到独立 isolate，避免首启时阻塞首帧。
+    final generated = await Isolate.run(_generateKeyMaterial);
 
-    await certFile.writeAsString(certificatePem, flush: true);
-    await keyFile.writeAsString(privateKeyPem, flush: true);
+    await certFile.writeAsString(generated.certificatePem, flush: true);
+    await keyFile.writeAsString(generated.privateKeyPem, flush: true);
 
     return TlsIdentity(
       certificatePath: certFile.path,
       privateKeyPath: keyFile.path,
-      certificatePem: certificatePem,
-      fingerprint: certificateFingerprint(certificatePem),
+      certificatePem: generated.certificatePem,
+      fingerprint: certificateFingerprint(generated.certificatePem),
     );
   }
+}
+
+/// Generates the self-signed certificate and private key on a worker isolate.
+({String certificatePem, String privateKeyPem}) _generateKeyMaterial() {
+  final keyPair = CryptoUtils.generateRSAKeyPair();
+  final privateKey = keyPair.privateKey as RSAPrivateKey;
+  final publicKey = keyPair.publicKey as RSAPublicKey;
+  final csr = X509Utils.generateRsaCsrPem(
+    {
+      'CN': TlsIdentityService.certificateCommonName,
+      'O': 'Flashbyte',
+      'OU': '',
+      'L': '',
+      'S': '',
+      'C': '',
+    },
+    privateKey,
+    publicKey,
+  );
+  final certificatePem = X509Utils.generateSelfSignedCertificate(
+    privateKey,
+    csr,
+    365 * 10,
+  );
+  final privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPemPkcs1(privateKey);
+  return (certificatePem: certificatePem, privateKeyPem: privateKeyPem);
 }

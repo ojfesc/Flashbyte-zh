@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_service_channel_name">文件传输</string>
+    <string name="transfer_service_title">Flashbyte 正在传输文件</string>
+    <string name="transfer_service_text">传输完成前请保持应用打开。</string>
+</resources>

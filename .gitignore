@@ -139,3 +139,11 @@ app.*.symbols
 AGENTS.md
 agent.md
 
+
+# Stray archives and local signing material
+nvim-*.tar.gz
+*.tar.gz
+KEYSTORE_BASE64.txt
+*.jks
+*.keystore
+

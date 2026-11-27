@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:loading_indicator_m3e/loading_indicator_m3e.dart';
 import 'package:mime/mime.dart';
 import 'package:open_file/open_file.dart';
-import 'package:process_run/process_run.dart';
 import 'package:widget_zoom/widget_zoom.dart';
 
 class FilePreviewWidget extends StatefulWidget {
@@ -148,6 +147,12 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    // 只按屏幕所需分辨率解码：直接加载原图时，高像素照片会占用几百 MB 内存。
+    final previewCacheWidth =
+        (MediaQuery.sizeOf(context).width *
+                MediaQuery.devicePixelRatioOf(context))
+            .clamp(320.0, 2560.0)
+            .toInt();
 
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 20),
@@ -206,7 +211,10 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
                                     fit: BoxFit.fitWidth,
                                     child: WidgetZoom(
                                       heroAnimationTag: widget.uuid,
-                                      zoomWidget: Image.file(previewFile!),
+                                      zoomWidget: Image.file(
+                                        previewFile!,
+                                        cacheWidth: previewCacheWidth,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -334,15 +342,17 @@ class _FilePreviewWidgetState extends State<FilePreviewWidget> {
     }
 
     if (Platform.isWindows) {
-      await run('explorer "$folderPath"', runInShell: true);
+      // 参数数组而不是拼接 shell 字符串：目录名里的字符不会被当成命令。
+      await Process.run('explorer', [folderPath]);
     } else if (Platform.isMacOS) {
-      await run('open "$folderPath"', runInShell: true);
+      await Process.run('open', [folderPath]);
     } else if (Platform.isLinux) {
-      await run('xdg-open "$folderPath"', runInShell: true);
+      await Process.run('xdg-open', [folderPath]);
     } else if (Platform.isAndroid || Platform.isIOS) {
       final downloadsPath = await AppSettings.getDownloadDirectory();
       final result = await OpenFile.open("$downloadsPath/");
       if (result.type == ResultType.fileNotFound) {
+        if (!mounted) return;
         showScaffoldSnackbar(AppLocalizations.of(context).couldNotOpenFolder);
       }
     }

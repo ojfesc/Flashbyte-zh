@@ -208,7 +208,10 @@ class AppLocalizations {
   String get visibleAs => isZh ? '可见名称' : 'Visible as';
   String get creatingYourName => isZh ? '正在创建你的名称…' : 'Creating your name...';
   String get resetToDeviceName => isZh ? '重置为设备名称' : 'Reset to device name';
-  String get generateNewName => isZh ? '生成新名称' : 'Generate a new name';
+  String get deviceNameEmpty =>
+      isZh ? '名称不能为空。' : 'The name cannot be empty.';
+  String get deviceNameTooLong =>
+      isZh ? '名称最多 32 个字符。' : 'Names can be up to 32 characters.';
   String get sendFilesTitle => isZh ? '发送文件' : 'Send files';
   String get pickFilesThenChoose => isZh
       ? '选择文件，然后选择附近的接收方。'
@@ -368,6 +371,8 @@ class AppLocalizations {
   String get statusRequest => isZh ? '请求' : 'request';
   String get statusWaiting => isZh ? '等待中' : 'waiting';
   String get statusCancelled => isZh ? '已取消' : 'cancelled';
+  String get statusQueued => isZh ? '排队中' : 'queued';
+  String get cancelFile => isZh ? '取消此文件' : 'Cancel this file';
   String get statusPaused => isZh ? '已暂停' : 'paused';
   String get transferPaused => isZh ? '传输已暂停' : 'Transfer paused';
   String get transferPausedHint =>

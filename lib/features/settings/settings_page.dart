@@ -553,7 +553,11 @@ class _SettingsPageState extends State<SettingsPage> {
                         for (final device in trustedDevices)
                           ListTile(
                             leading: const Icon(Icons.verified_user_rounded),
-                            title: Text(device.name),
+                            title: Text(
+                              device.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                             subtitle: Text(
                               device.fingerprint.length > 16
                                   ? '${device.fingerprint.substring(0, 16)}…'

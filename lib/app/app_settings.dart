@@ -1,8 +1,9 @@
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flashbyte/app/device_name.dart';
 import 'package:flashbyte/services/platform/android_saf_service.dart';
-import 'package:flashbyte/utils/two_random_words.dart';
+import 'package:flashbyte_core/utils/device_name.dart';
 import 'package:flutter/material.dart';
 import 'package:external_path/external_path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -57,41 +58,21 @@ class AppSettings {
   }
 
   static Future<String> getDeviceModelName() async {
-    try {
-      final deviceInfo = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
-        final androidInfo = await deviceInfo.androidInfo;
-        final model = androidInfo.model.trim();
-        if (model.isNotEmpty && !_isModelCode(model)) return model;
-        final brand = androidInfo.brand.trim();
-        if (brand.isNotEmpty) return brand;
-        final manufacturer = androidInfo.manufacturer.trim();
-        if (manufacturer.isNotEmpty) return manufacturer;
-      } else if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        final model = iosInfo.utsname.machine.trim();
-        if (model.isNotEmpty) return model;
-      }
-    } catch (_) {
-      // Fall through to hostname fallback.
+    final resolved = await DeviceName.resolveModelName(
+      deviceInfo: DeviceInfoPlugin(),
+    );
+    if (resolved.isNotEmpty) {
+      return resolved;
     }
-    final hostname = Platform.localHostname.trim();
-    if (hostname.isNotEmpty && hostname != 'localhost') return hostname;
-    return Platform.localeName.toLowerCase().startsWith('zh')
-        ? '未知设备'
-        : 'Unknown Device';
-  }
-
-  /// Internal model codes like "2201117TG" or "SM-G991B" — all-caps
-  /// alphanumeric without spaces — aren't user-facing names.
-  static bool _isModelCode(String value) {
-    return RegExp(r'^[A-Z0-9\-/]+$').hasMatch(value);
+    return DeviceName.fallbackFor(await getLanguage());
   }
 
   static Future<String> getDeviceName() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedName = prefs.getString(deviceNameKey);
-    if (savedName != null && savedName.isNotEmpty) {
+    final savedName = DeviceNameRules.sanitize(
+      prefs.getString(deviceNameKey) ?? '',
+    );
+    if (savedName.isNotEmpty) {
       return savedName;
     }
 
@@ -101,16 +82,8 @@ class AppSettings {
     return modelName;
   }
 
-  static Future<String> generateDeviceName() async {
-    final words = RandomWords();
-    final name =
-        '${_capitalize(words.firstWord)} ${_capitalize(words.secondWord)}';
-    await setDeviceName(name);
-    return name;
-  }
-
   static Future<void> setDeviceName(String name) async {
-    final normalizedName = name.trim();
+    final normalizedName = DeviceNameRules.sanitize(name);
     if (normalizedName.isEmpty) {
       return;
     }
@@ -129,11 +102,6 @@ class AppSettings {
     final id = const Uuid().v4();
     await prefs.setString(deviceIdKey, id);
     return id;
-  }
-
-  static String _capitalize(String value) {
-    if (value.isEmpty) return value;
-    return '${value[0].toUpperCase()}${value.substring(1)}';
   }
 
   static Future<String> getDownloadDirectory() async {
@@ -156,6 +124,15 @@ class AppSettings {
 
   static Future<String> getDefaultDownloadDirectory() async {
     if (Platform.isAndroid) {
+      // Android 10 之前写公共 Downloads 需要存储权限；旧系统改用应用专属外部目录，
+      // 避免默认路径写入失败后又被静默替换成应用私有目录。
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      if (androidInfo.version.sdkInt < 29) {
+        final appExternalDirectory = await getExternalStorageDirectory();
+        if (appExternalDirectory != null) {
+          return appExternalDirectory.path;
+        }
+      }
       return ExternalPath.getExternalStoragePublicDirectory(
         ExternalPath.DIRECTORY_DOWNLOAD,
       );

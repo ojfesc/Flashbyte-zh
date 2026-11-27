@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_service_channel_name">File transfer</string>
+    <string name="transfer_service_title">Flashbyte is transferring files</string>
+    <string name="transfer_service_text">Keep the app open until the transfer finishes.</string>
+</resources>
