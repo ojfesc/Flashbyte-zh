@@ -226,30 +226,76 @@ class MainActivity : FlutterActivity() {
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
             return emptyList()
         }
-        val uris = mutableListOf<Uri>()
+
+        val uris = linkedSetOf<Uri>()
         if (action == Intent.ACTION_SEND) {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.add(it) }
         } else {
             @Suppress("DEPRECATION")
-            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let {
+                uris.addAll(it)
+            }
+        }
+        // 有些应用只把 URI 放进 ClipData，不写 EXTRA_STREAM。
+        intent.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index)?.uri?.let { uris.add(it) }
+            }
         }
         intent.removeExtra(Intent.EXTRA_STREAM)
-        persistReadPermission(uris)
-        return describeUris(uris)
+
+        if (uris.isEmpty()) {
+            // 纯文本/链接分享：交给 Dart 侧按粘贴板内容处理。
+            var text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            if (text.isNullOrEmpty()) {
+                // 有些应用只把文本放进 ClipData。
+                val clip = intent.clipData
+                if (clip != null) {
+                    for (index in 0 until clip.itemCount) {
+                        val value = clip.getItemAt(index)?.text?.toString()
+                        if (!value.isNullOrEmpty()) {
+                            text = value
+                            break
+                        }
+                    }
+                }
+            }
+            if (!text.isNullOrEmpty()) {
+                return listOf(
+                    mapOf(
+                        "text" to text,
+                        "clipboard" to true
+                    )
+                )
+            }
+            return emptyList()
+        }
+
+        val persisted = persistReadPermission(uris)
+        return describeUris(uris.toList()).map { entry ->
+            val map = entry.toMutableMap()
+            val uri = entry["uri"] as? String
+            map["persistable"] = uri != null && persisted.contains(uri)
+            map
+        }
     }
 
-    private fun persistReadPermission(uris: List<Uri>) {
+    /** 尝试把读权限持久化；返回成功的 URI，未成功的只在本次运行内可读。 */
+    private fun persistReadPermission(uris: Collection<Uri>): Set<String> {
+        val persisted = mutableSetOf<String>()
         for (uri in uris) {
             try {
                 contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+                persisted.add(uri.toString())
             } catch (_: Exception) {
-                // 分享方没给可持久化权限时忽略：本次启动期间仍可读
+                // 分享方没给可持久化权限时忽略。
             }
         }
+        return persisted
     }
 
     /** 只查询显示名和大小，不读取文件内容。 */
