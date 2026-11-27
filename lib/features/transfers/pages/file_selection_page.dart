@@ -10,6 +10,7 @@ import 'package:flashbyte/app/app_settings.dart';
 import 'package:flashbyte/app/device_name.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/models/discovered_device.dart';
+import 'package:flashbyte/models/shared_files.dart';
 import 'package:flashbyte/services/discovery/device_discovery_service.dart';
 import 'package:flashbyte/services/transfer/socket_service.dart';
 import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
@@ -33,10 +34,14 @@ class FileSelectionPage extends StatefulWidget {
   final int initialTabIndex;
   final List<FastFilePickerPath> initialFiles;
 
+  /// 由分享文本/链接生成的文件，发送时按粘贴板处理。
+  final Set<String> initialClipboardPaths;
+
   const FileSelectionPage({
     super.key,
     this.initialTabIndex = 0,
     this.initialFiles = const [],
+    this.initialClipboardPaths = const {},
   });
 
   @override
@@ -95,7 +100,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
   StreamSubscription? _socketSubscription;
   StreamSubscription<List<DiscoveredDevice>>? _discoverySubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
-  StreamSubscription<List<FastFilePickerPath>>? _sharedFilesSubscription;
+  StreamSubscription<SharedFiles>? _sharedFilesSubscription;
   Timer? _networkRefreshTimer;
   Timer? _networkGraceTimer;
   int _serverRestartGeneration = 0;
@@ -108,6 +113,9 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     super.initState();
     selectedTabIndex = widget.initialTabIndex;
     selectedFiles = List.of(widget.initialFiles);
+    _clipboardFilePaths
+      ..clear()
+      ..addAll(widget.initialClipboardPaths);
     _tabController = TabController(
       length: 2,
       vsync: this,
@@ -116,7 +124,7 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     _tabController.addListener(_handleTabChanged);
     _deviceNameFocusNode.addListener(_handleDeviceNameFocusChanged);
     _sharedFilesSubscription = IncomingShareService.instance.sharedFilesStream
-        .listen(_appendSharedFiles);
+        .listen(_applySharedFiles);
     _discoveryRefreshController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 520),
@@ -395,41 +403,30 @@ class _FileSelectionPageState extends State<FileSelectionPage>
     }
   }
 
-  void _appendSharedFiles(List<FastFilePickerPath> batch) {
-    // An active session handles shares itself (TcpChatPage sends them
-    // straight to the connected peer).
+  /// 分享进来的内容替换当前选择，与应用内“选择文件/文件夹”保持一致。
+  void _applySharedFiles(SharedFiles batch) {
+    // 会话页正处于打开状态时由会话页自己处理分享内容。
     if (!mounted || batch.isEmpty || chatOpened) {
       return;
     }
-    var added = 0;
+
+    final l10n = AppLocalizations.of(context);
     setState(() {
-      for (final file in batch) {
-        final alreadyPresent = selectedFiles.any(
-          (existing) =>
-              (file.path != null && existing.path == file.path) ||
-              (file.uri != null && existing.uri == file.uri),
-        );
-        if (!alreadyPresent) {
-          selectedFiles.add(file);
-          added++;
-        }
-      }
-      if (added > 0) {
-        selectedTabIndex = 0;
-        if (_tabController.index != 0) {
-          _tabController.index = 0;
-        }
+      selectedFiles = List.of(batch.files);
+      _clipboardFilePaths
+        ..clear()
+        ..addAll(batch.clipboardPaths);
+      selectedTabIndex = 0;
+      if (_tabController.index != 0) {
+        _tabController.index = 0;
       }
     });
-    if (added > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            AppLocalizations.of(context).sharedFilesAdded(added),
-          ),
-        ),
-      );
-    }
+
+    showScaffoldSnackbar(
+      batch.hasEphemeralFiles
+          ? l10n.sharedFilesEphemeral
+          : l10n.sharedFilesReplaced(batch.files.length),
+    );
   }
 
   Future<void> _pickFiles() async {
