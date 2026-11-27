@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/models/shared_files.dart';
 import 'package:flashbyte/services/platform/android_document_service.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -26,6 +27,26 @@ class IncomingShareService with WidgetsBindingObserver {
 
   /// 每次分享发出一条事件，里面只包含这一次分享的内容。
   Stream<SharedFiles> get sharedFilesStream => _controller.stream;
+
+  /// 会话页是否已经挂载并接管分享；用于页面切换瞬间的交接。
+  bool sessionActive = false;
+
+  SharedFiles? _deferredForSession;
+
+  /// 会话页正在打开、还没订阅流时，文件选择页先把这一次分享暂存起来。
+  void deferForSession(SharedFiles batch) {
+    _deferredForSession = batch;
+  }
+
+  SharedFiles? takeDeferredForSession() {
+    final batch = _deferredForSession;
+    _deferredForSession = null;
+    return batch;
+  }
+
+  void clearDeferredForSession() {
+    _deferredForSession = null;
+  }
 
   bool get _supported => Platform.isAndroid || Platform.isIOS;
 
@@ -100,11 +121,14 @@ class IncomingShareService with WidgetsBindingObserver {
         continue;
       }
       final rawName = item['name'];
-      final name = rawName is String && rawName.isNotEmpty
+      final isClipboard = item['clipboard'] == true;
+      final name = isClipboard
+          ? clipboardTextDisplayName()
+          : rawName is String && rawName.isNotEmpty
           ? rawName
           : path.split('/').last;
       files.add(FastFilePickerPath.fromPath(name, path));
-      if (item['clipboard'] == true) {
+      if (isClipboard) {
         clipboardPaths.add(path);
       }
     }
