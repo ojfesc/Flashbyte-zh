@@ -86,7 +86,7 @@ class AndroidDocumentService {
           continue;
         }
         files.add(
-          FastFilePickerPath.fromPath(_clipboardFileName(), file.path),
+          FastFilePickerPath.fromPath(clipboardTextDisplayName(), file.path),
         );
         clipboardPaths.add(file.path);
         continue;
@@ -123,12 +123,5 @@ class AndroidDocumentService {
         ? rawName
         : uri.split('/').last;
     return FastFilePickerPath.fromPath(name, uri);
-  }
-
-  /// 与应用内“粘贴板”按钮使用同一个显示名。
-  String _clipboardFileName() {
-    return Platform.localeName.toLowerCase().startsWith('zh')
-        ? '粘贴板文本.txt'
-        : 'Clipboard.txt';
   }
 }
