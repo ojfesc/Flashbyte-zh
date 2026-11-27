@@ -23,6 +23,9 @@ import 'package:uuid/uuid.dart';
 final _sendingFileSizes = <String, int>{};
 final _resumeOffsets = <String, int>{};
 
+/// 与 Android 原生查询 URI 元数据的通道；分享来源可能不是 DocumentsProvider。
+const MethodChannel _documentsChannel = MethodChannel('flashbyte/documents');
+
 /// Serializes partial-file cleanup with a reconnect that may reopen the same
 /// partial file. Without this, a new connection could append while the old
 /// receiver handler is still closing its sink.
@@ -1185,12 +1188,32 @@ class _SendSource {
 /// 流式读取（[Saf.readFileStream]），不再把整个文档复制到缓存——几 GB 的文件复制
 /// 既会长时间卡住，也会占满缓存目录。
 Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
-  final fileStats = await saf.stat(uri);
-  if (fileStats == null) {
+  String? fileName;
+  int? fileSize;
+  try {
+    final fileStats = await saf.stat(uri);
+    if (fileStats != null) {
+      fileName = fileStats.name;
+      fileSize = fileStats.length;
+    }
+  } catch (_) {
+    // 非 DocumentsProvider 的 URI 由下面的兜底处理。
+  }
+
+  if (fileName == null || fileSize == null) {
+    final fallback = await _statContentUri(uri);
+    if (fallback == null) {
+      return null;
+    }
+    fileName = fallback.name;
+    fileSize = fallback.size;
+  }
+
+  final resolvedName = fileName;
+  final resolvedSize = fileSize;
+  if (resolvedName == null || resolvedSize == null) {
     return null;
   }
-  final fileName = fileStats.name;
-  final fileSize = fileStats.length;
 
   int? openedFd;
   try {
@@ -1201,8 +1224,8 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
     await probe.close();
     return _SendSource(
       file: pseudoFile,
-      fileName: fileName,
-      fileSize: fileSize,
+      fileName: resolvedName,
+      fileSize: resolvedSize,
       fd: openedFd,
     );
   } catch (_) {
@@ -1215,10 +1238,32 @@ Future<_SendSource?> _openAndroidSendSource(Saf saf, String uri) async {
 
   final chunks = await saf.readFileStream(uri);
   return _SendSource(
-    fileName: fileName,
-    fileSize: fileSize,
+    fileName: resolvedName,
+    fileSize: resolvedSize,
     chunks: chunks,
   );
+}
+
+/// SAF 的 stat 只支持 DocumentsProvider；分享来源（相册、社交应用等）常常
+/// 不是，这时用原生按 OpenableColumns 取名字和大小，读取仍走 content:// 流。
+Future<({String name, int size})?> _statContentUri(String uri) async {
+  try {
+    final raw = await _documentsChannel.invokeMethod<dynamic>(
+      'statUri',
+      {'uri': uri},
+    );
+    if (raw is! Map) {
+      return null;
+    }
+    final name = raw['name'];
+    final size = raw['size'];
+    if (name is! String || name.isEmpty || size is! int || size < 0) {
+      return null;
+    }
+    return (name: name, size: size);
+  } on Exception {
+    return null;
+  }
 }
 
 Future<void> _sendFileSequentially({
