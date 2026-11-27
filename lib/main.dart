@@ -18,6 +18,7 @@ import 'package:flashbyte/app/controllers/app_motion_controller.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
 import 'package:flashbyte/services/security/tls_identity_service.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
+import 'package:flashbyte/services/transfer/clipboard_text_file.dart';
 import 'package:flashbyte/features/settings/settings_page.dart';
 import 'package:flashbyte/features/transfers/pages/file_selection_page.dart';
 import 'package:flashbyte/widgets/background_permission_gate.dart';
@@ -30,6 +31,9 @@ import 'package:material_new_shapes/material_new_shapes.dart';
 import 'package:motor/motor.dart';
 
 WindowStateManager? _windowStateManager;
+
+/// 本次进程启动的时间，用于只清理上一次运行留下的临时文件。
+DateTime? _appLaunchTime;
 
 @pragma('vm:entry-point')
 Future<void> onNotificationActionReceived(ReceivedAction receivedAction) async {
@@ -47,6 +51,7 @@ Future<void> onNotificationDismissed(ReceivedAction receivedAction) async {
 }
 
 Future<void> main() async {
+  _appLaunchTime = DateTime.now();
   WidgetsFlutterBinding.ensureInitialized();
 
   // 读取语言设置，使通知渠道名称与描述匹配应用语言。
@@ -214,6 +219,9 @@ class _StartupEffectsState extends State<StartupEffects> {
       unawaited(AndroidConnectionNotificationService.instance.initialize());
       unawaited(TrustedDevicesService.instance.load());
       unawaited(IncomingShareService.instance.init());
+      unawaited(
+        cleanupSharedTextFiles(before: _appLaunchTime ?? DateTime.now()),
+      );
     });
   }
 
@@ -251,6 +259,7 @@ class _StartPageState extends State<StartPage> {
         0,
         initialFiles: batch.files,
         initialClipboardPaths: batch.clipboardPaths,
+        initialHasEphemeralFiles: batch.hasEphemeralFiles,
       );
     });
   }
@@ -626,6 +635,7 @@ class _StartPageState extends State<StartPage> {
     int initialTabIndex, {
     List<FastFilePickerPath> initialFiles = const [],
     Set<String> initialClipboardPaths = const {},
+    bool initialHasEphemeralFiles = false,
   }) {
     if (_sharingOpen) {
       return;
@@ -638,6 +648,7 @@ class _StartPageState extends State<StartPage> {
           initialTabIndex: initialTabIndex,
           initialFiles: initialFiles,
           initialClipboardPaths: initialClipboardPaths,
+          initialHasEphemeralFiles: initialHasEphemeralFiles,
         ),
       ),
     ).whenComplete(() {
