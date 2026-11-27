@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:fast_file_picker/fast_file_picker.dart';
 import 'package:flashbyte/l10n/app_localizations.dart';
+import 'package:flashbyte/models/shared_files.dart';
 import 'package:flashbyte/services/security/trusted_devices_service.dart';
 import 'package:flashbyte/services/sharing/incoming_share_service.dart';
 import 'package:flashbyte/services/platform/android_document_service.dart';
@@ -78,7 +79,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
   Map<String, dynamic>? _peerInfo;
 
   StreamSubscription? _streamSubscription;
-  StreamSubscription<List<FastFilePickerPath>>? _sharedFilesSubscription;
+  StreamSubscription<SharedFiles>? _sharedFilesSubscription;
 
   @override
   void initState() {
@@ -97,7 +98,7 @@ class _TcpChatPageState extends State<TcpChatPage> {
             return;
           }
           final locations = <String>[];
-          for (final file in batch) {
+          for (final file in batch.files) {
             final location = _pickedFileLocation(file);
             if (location != null) locations.add(location);
           }
@@ -107,13 +108,28 @@ class _TcpChatPageState extends State<TcpChatPage> {
             );
             return;
           }
-          _sendLocations(locations);
           final l10n = AppLocalizations.of(context);
+          final clipboardLocations = locations
+              .where(batch.clipboardPaths.contains)
+              .toSet();
+          if (clipboardLocations.isEmpty) {
+            _sendLocations(locations);
+          } else {
+            // 分享的文本/链接按粘贴板发送，与应用内粘贴板按钮一致。
+            for (final location in locations) {
+              final isClipboard = clipboardLocations.contains(location);
+              SocketService.instance.sendFile(
+                location,
+                clipboard: isClipboard,
+                displayName: isClipboard ? l10n.clipboardFileName : null,
+              );
+            }
+          }
           final peerName = _peerName(context);
           showScaffoldSnackbar(
-            batch.length == 1
+            batch.files.length == 1
                 ? l10n.sendingSharedFileTo(peerName)
-                : l10n.sendingNSharedFilesTo(batch.length, peerName),
+                : l10n.sendingNSharedFilesTo(batch.files.length, peerName),
           );
         });
 
